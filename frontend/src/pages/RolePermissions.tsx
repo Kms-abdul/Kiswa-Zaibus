@@ -72,6 +72,9 @@ export default function RolePermissions({ edit }: { edit: boolean }) {
       .filter(m => m.screens.length);
   }, [c, q]);
 
+  if (cat.err || roles.err) return <Panel title="Roles and permissions"><p className="err">Could not load the roles: {cat.err || roles.err}</p></Panel>;
+  if (cat.data && !c) return <Panel title="Roles and permissions"><p className="err">The server is running an older version that does not send
+    the permission catalogue. Restart the backend (and run <code>python -m alembic upgrade head</code> if you have not), then refresh this page.</p></Panel>;
   if (!c || !roles.data) return <Panel title="Roles and permissions"><p className="muted">Loading…</p></Panel>;
   const allActions = c.modes.find(m => m.key === 'full')?.actions || [];
   const extraLabel = (k: string) => c.extras.find(e => e.key === k)?.label || k;
