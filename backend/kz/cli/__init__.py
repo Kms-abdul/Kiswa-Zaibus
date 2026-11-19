@@ -7,6 +7,7 @@
   doctor                   check data integrity: audit chain, books balance, stock ledger = balance, orphans
   send-outbox              send queued email / SMS / WhatsApp now
   set-password EMP_ID      give a user a new temporary password (they must change it at next sign-in)
+  sync-permissions         copy the permission catalogue into the database (also done at every start-up)
 """
 import secrets
 import string
@@ -89,6 +90,18 @@ def register(app):
             _done(False)
             raise
         click.echo(f"sent={r['sent']} failed={r['failed']}")
+
+    @kz.command('sync-permissions')
+    def sync_permissions_cmd():
+        """Copy the permission catalogue (kz/core/permission_catalog.py) into perm_modules / perm_screens (also done at start-up)."""
+        from ..core.permission_catalog import sync_catalog
+        try:
+            r = sync_catalog(db.session().connection())
+            _done(True)
+        except Exception:
+            _done(False)
+            raise
+        click.echo(f"Permission catalogue synced: {r['modules']} modules, {r['screens']} screens.")
 
     @kz.command('doctor')
     def doctor_cmd():

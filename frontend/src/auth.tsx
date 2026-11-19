@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { api, onUnauthorised, store } from './api';
 
 export type Me = {
-  id: string; name: string; emp_id: string; role: string; roles: string[]; designation: string | null;
+  id: string; name: string; emp_id: string; role: string; role_label?: string; roles: string[]; designation: string | null;
   companies: string[]; branches: string[] | '*'; rank: number; read_only: boolean; permissions: Record<string, string[]>;
 };
 export type Branch = { id: string; company: string; location: string; code: string; active: number; name: string; type: string };
@@ -15,6 +15,8 @@ type Ctx = {
 };
 const AuthCtx = createContext<Ctx>(null as unknown as Ctx);
 const RO = ['view', 'print', 'pdf', 'export', 'audit', 'fin', 'cost'];
+// same narrow exception as the backend (core/rbac.py RO_EXCEPTIONS): a read-only internal auditor may count stock audits
+const RO_EXCEPTIONS: Record<string, string[]> = { saudit: ['edit', 'submit', 'upload', 'import'] };
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<Me | null>(null);
@@ -36,7 +38,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(async () => { try { await api('/auth/logout', { body: {} }); } finally { setMe(null); } }, []);
   const can = useCallback((action: string, key: string) => {
     if (!me) return false;
-    if (me.read_only && !RO.includes(action)) return false;
+    if (me.read_only && !RO.includes(action) && !(RO_EXCEPTIONS[key] || []).includes(action)) return false;
     const m = key.split('.')[0];
     const acts = me.permissions[key] ?? me.permissions[m] ?? [];
     if (acts.includes(action)) return true;

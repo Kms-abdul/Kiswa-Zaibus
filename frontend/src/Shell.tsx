@@ -94,7 +94,7 @@ export default function Shell() {
             </div>
           ))}
         </nav>
-        <div className="who"><span className="av" aria-hidden>{me!.name.split(' ').map(w => w[0]).slice(0, 2).join('')}</span><div className="who-t"><b>{me!.name}</b><small>{me!.role}{me!.read_only ? ' · read-only' : ''}</small>
+        <div className="who"><span className="av" aria-hidden>{me!.name.split(' ').map(w => w[0]).slice(0, 2).join('')}</span><div className="who-t"><b>{me!.name}</b><small>{me!.role_label || me!.role}{me!.read_only ? ' · read-only' : ''}</small>
           <div className="row"><button className="link" onClick={() => nav('/profile')}>My account</button><button className="link" onClick={signOut}>Sign out</button></div></div></div>
       </aside>
       <main>

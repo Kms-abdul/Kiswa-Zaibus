@@ -5,7 +5,8 @@ import { api } from '../api';
 import { useAuth } from '../auth';
 import { co, day, inr } from '../format';
 import { RecordForm, useCustomFields, type Spec } from '../ui/forms';
-import { Btn, ConfirmBtn, DataTable, Field, ItemSearch, Kv, Modal, Page, Panel, Pill, StudentSearch, useAction, useLoad, useToast, useUrlState } from '../ui/kit';
+import RolePermissions from './RolePermissions';
+import { Btn, ConfirmBtn, DataTable, ItemSearch, Kv, Modal, Page, Panel, Pill, StudentSearch, useAction, useLoad, useUrlState } from '../ui/kit';
 
 type Tab = { k: string; label: string; ok: boolean; el: JSX.Element };
 
@@ -26,7 +27,7 @@ export default function Setup() {
     { k: 'customers', label: 'Customers', ok: can('view', 'acc') || can('view', 'pos'), el: <Customers edit={inv || acc} add={can('add', 'acc')} /> },
     { k: 'students', label: 'Students', ok: can('view', 'pos') || can('view', 'msea') || can('view', 'set'), el: <Students edit={inv || acc || set} /> },
     { k: 'accounts', label: 'Chart of accounts', ok: can('view', 'acc'), el: <Accounts edit={acc} /> },
-    { k: 'roles', label: 'Roles & permissions', ok: ctl, el: <Roles edit={can('users', 'ctl')} /> },
+    { k: 'roles', label: 'Roles & permissions', ok: ctl, el: <RolePermissions edit={can('users', 'ctl')} /> },
     { k: 'fields', label: 'Custom fields', ok: can('view', 'set'), el: <CustomFields edit={set} /> },
   ].filter(t => t.ok);
   const [tab, setTab] = useUrlState<string>('tab', tabs[0]?.k || '');
@@ -314,57 +315,6 @@ function Accounts({ edit }: { edit: boolean }) {
       extra={v => (control.has(v.code) ? <p className="muted">System account: bills, receipts, stock and GST post to it automatically. It can be renamed but not switched off; sub-ledger accounts (receivables, payables, stock) cannot be used in manual journals.</p> : null)}
       save={(v, n) => reload(l, n ? api('/setup/accounts', { body: { company, code: v.code, name: v.name } }) : api(`/setup/accounts/${company}/${v.code}`, { method: 'PUT', body: { name: v.name, active: !!v.active } }))} />
   </>;
-}
-
-// ------------------------------------------------------------ roles & permissions
-function Roles({ edit }: { edit: boolean }) {
-  const toast = useToast();
-  const l = useLoad<any[]>(() => api('/setup/roles'), []);
-  const cat = useLoad<any>(() => api('/setup/catalog'), []);
-  const [sel, setSel] = useState<any>(null);
-  const [nw, setNw] = useState<any>(null);
-  const [reason, setReason] = useState('');
-  const [run, busy] = useAction();
-  const save = async () => {
-    if (!reason.trim()) { toast('Give the reason for this change.', 'bad'); return; }
-    const body = { description: sel.description, approval_rank: Number(sel.approval_rank) || 0, read_only: !!sel.read_only, active: sel.active !== 0 && sel.active !== false,
-      permissions: sel.permissions, limits: sel.limits, reason };
-    if (await run(() => api(`/setup/roles/${encodeURIComponent(sel.name)}`, { method: 'PUT', body }), (x: any) => (x.status === 'Applied' ? 'Role saved.' : ''))) { setSel(null); setReason(''); l.reload(); }
-  };
-  const toggle = (key: string, a: string) => setSel((s: any) => { const cur = new Set<string>(s.permissions[key] || []); if (cur.has(a)) cur.delete(a); else cur.add(a); return { ...s, permissions: { ...s.permissions, [key]: [...cur] } }; });
-  const screens: [string, string][] = cat.data?.screens || [];
-  const actions: string[] = cat.data?.actions || [];
-  return <Panel title="Roles" actions={edit && <Btn kind="pri" onClick={() => setNw({ name: '', copy_from: '' })}>New role</Btn>}>
-    <DataTable rows={l.data} onRow={r => setSel(JSON.parse(JSON.stringify(r)))} keyOf={r => r.name} cols={[{ key: 'name', label: 'Role', primary: true }, { key: 'description', label: 'Description', hideSmall: true },
-      { key: 'approval_rank', label: 'Rank', align: 'r' }, { key: 'users', label: 'Users', align: 'r' }, { key: 'read_only', label: '', render: (r: any) => (r.read_only ? <Pill s="Read-only" tone="info" /> : '') },
-      { key: 'active', label: 'Status', render: (r: any) => yes(r.active) }]} />
-    {sel && <Modal wide title={`Role · ${sel.name}`} onClose={() => setSel(null)} footer={edit && sel.name !== 'Super Admin' ? <>
-      <input placeholder="Reason for the change" value={reason} onChange={e => setReason(e.target.value)} aria-label="Reason" /><Btn kind="pri" busy={busy} onClick={save}>Submit</Btn></> : undefined}>
-      {sel.name === 'Super Admin' && <p className="note info">The Super Admin role is fixed and always has every right on every screen and the highest approval and transaction limits. Only two rules still apply: nobody approves their own request, and each user sees only the companies and locations assigned to them.</p>}
-      <div className="form grid2">
-        <Field label="Description"><input value={sel.description || ''} onChange={e => setSel({ ...sel, description: e.target.value })} /></Field>
-        <Field label="Approval rank (0 = cannot approve)"><input inputMode="decimal" value={sel.approval_rank} onChange={e => setSel({ ...sel, approval_rank: e.target.value })} /></Field>
-        <label className="check"><input type="checkbox" checked={!!sel.read_only} onChange={e => setSel({ ...sel, read_only: e.target.checked })} />Read-only (auditors)</label>
-      </div>
-      <h4>Permissions</h4>
-      <div className="table-wrap perm"><table><thead><tr><th>Screen</th>{actions.map(a => <th key={a} className="vert"><span>{a}</span></th>)}</tr></thead><tbody>
-        {screens.map(([k, label]) => <tr key={k}><th>{label}</th>{actions.map(a => <td key={a}><input type="checkbox" aria-label={`${label} ${a}`} checked={(sel.permissions[k] || []).includes(a)} onChange={() => toggle(k, a)} /></td>)}</tr>)}
-      </tbody></table></div>
-      <h4>Approval limits</h4>
-      <div className="form grid2">{(cat.data?.limits || []).map(([k, label]: [string, string]) => <Field key={k} label={label}>
-        <input inputMode="decimal" value={sel.limits[k] ?? ''} onChange={e => setSel({ ...sel, limits: { ...sel.limits, [k]: e.target.value } })} placeholder="0 = must ask" /></Field>)}</div>
-      <p className="muted">A user may approve up to their highest role limit. Changes go to a second person for approval when maker-checker is on.</p>
-    </Modal>}
-    {nw && <Modal title="New role" onClose={() => setNw(null)} footer={<><Btn onClick={() => setNw(null)}>Cancel</Btn><Btn kind="pri" busy={busy} onClick={async () => {
-      if (await run(() => api('/setup/roles', { body: nw }), (x: any) => (x.status === 'Applied' ? 'Role created.' : ''))) { setNw(null); l.reload(); } }}>Create</Btn></>}>
-      <div className="form">
-        <Field label="Role name"><input value={nw.name} onChange={e => setNw({ ...nw, name: e.target.value })} /></Field>
-        <Field label="Start from the permissions of"><select value={nw.copy_from} onChange={e => setNw({ ...nw, copy_from: e.target.value })}><option value="">Nothing (empty)</option>{(l.data || []).map(r => <option key={r.name}>{r.name}</option>)}</select></Field>
-        <Field label="Description"><input value={nw.description || ''} onChange={e => setNw({ ...nw, description: e.target.value })} /></Field>
-        <Field label="Reason"><input value={nw.reason || ''} onChange={e => setNw({ ...nw, reason: e.target.value })} /></Field>
-      </div>
-    </Modal>}
-  </Panel>;
 }
 
 // ------------------------------------------------------------ custom fields

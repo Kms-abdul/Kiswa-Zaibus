@@ -15,6 +15,7 @@ from flask import g, request
 from .. import db
 from ..config import Config
 from ..errors import ApiError, denied
+from . import permission_catalog as _catalog
 from .security import policy, sha
 
 READ_ONLY_ACTIONS = {'view', 'print', 'pdf', 'export', 'audit', 'fin', 'cost'}
@@ -25,10 +26,9 @@ RO_EXCEPTIONS = {'saudit': {'edit', 'submit', 'upload', 'import'}}
 # Super Admin holds every right on every screen (release 2.7). Only maker-checker (nobody approves their own request) and the
 # branch / company scope assigned to the user still apply. The lists must cover every screen key and action used anywhere.
 SUPER_ADMIN = 'Super Admin'
-ALL_SCREENS = ('dash', 'pos', 'msea', 'onl', 'inv', 'pur', 'cash', 'acc', 'rep', 'appr', 'audit', 'set', 'ctl', 'ctl.int', 'ctl.pay', 'ctl.users',
-               'ctl.sec', 'saudit', 'fin')
-ALL_ACTIONS = ('view', 'add', 'edit', 'submit', 'approve', 'reject', 'return', 'cancel', 'reverse', 'delete', 'restore', 'print', 'pdf', 'export',
-               'import', 'upload', 'audit', 'fin', 'cost', 'master', 'cfgrep', 'users', 'verify', 'review', 'post')
+# Both lists come from the permission catalogue (core/permission_catalog.py); a screen added there is covered automatically.
+ALL_SCREENS = ('dash',) + tuple(_catalog.screen_keys())
+ALL_ACTIONS = tuple(_catalog.ACTIONS)
 
 
 def is_super(u):

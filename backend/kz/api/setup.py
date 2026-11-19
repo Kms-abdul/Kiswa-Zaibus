@@ -17,6 +17,7 @@ from flask import Blueprint, g, jsonify, request
 
 from .. import db
 from ..core import audit
+from ..core import permission_catalog as perm_catalog
 from ..core.approvals import handler, mc_on, request as mc_request
 from ..core.rbac import body, can, high_risk, login_required, require
 from ..core.routing import route_role
@@ -30,14 +31,10 @@ bp = Blueprint('setup', __name__, url_prefix='/api/setup')
 
 # accounts the system posts to by itself: they can be renamed but never switched off (ledger.CONTROL_ACCOUNTS + cash, bank, GST, sales, COGS)
 CONTROL = set(CONTROL_ACCOUNTS) | {'1100', '1110', '1115', '1120', '1310', '2100', '2110', '2120', '3000', '4000', '4010', '5000', '5100', '5600', '5700', '5850', '5950'}
-SCREENS = [('dash', 'Dashboard'), ('pos', 'Billing (POS)'), ('msea', 'MSEA sponsorship'), ('onl', 'Online orders'), ('inv', 'Stock and items'),
-           ('pur', 'Purchasing'), ('cash', 'Cash custody'), ('acc', 'Accounts'), ('rep', 'Reports'), ('appr', 'Approvals'), ('audit', 'Audit trail'),
-           ('set', 'Settings and setup'), ('ctl', 'Control (users, security)'), ('ctl.int', 'ERP integration'), ('ctl.pay', 'Payments (Razorpay)'), ('saudit', 'Stock audits'), ('fin', 'Finance & tax')]
-ACTIONS = ['view', 'add', 'edit', 'submit', 'approve', 'reject', 'return', 'cancel', 'reverse', 'delete', 'restore', 'print', 'pdf', 'export', 'import',
-           'upload', 'audit', 'fin', 'cost', 'master', 'cfgrep', 'users', 'verify', 'review', 'post']
-LIMITS = [('disc', 'Discount %'), ('po', 'Purchase order ₹'), ('pay', 'Supplier payment ₹'), ('refund', 'Refund ₹'), ('adj', 'Stock adjustment ₹'),
-          ('exp', 'Expense ₹'), ('cash', 'Cash difference ₹'), ('credit', 'Credit sale ₹'), ('transfer', 'Stock transfer ₹'), ('jv', 'Manual journal ₹'),
-          ('dn', 'Debit note ₹'), ('recon', 'Reconciliation write-off ₹')]
+# Screens, actions and limits come from the permission catalogue (core/permission_catalog.py): one place to add a screen.
+SCREENS = [(k, label) for k, _m, label, _a, _e in perm_catalog.SCREENS]
+ACTIONS = list(perm_catalog.ACTIONS)
+LIMITS = list(perm_catalog.LIMITS)
 
 
 def need_any(*pairs):
@@ -79,7 +76,9 @@ def _update(table, keycols, keyvals, fields, what, ref, category='master'):
 @login_required
 def catalog():
     return jsonify({'screens': SCREENS, 'actions': ACTIONS, 'limits': LIMITS, 'control_accounts': sorted(CONTROL),
-                    'report_keys': list(rs.REPORTS.items()), 'periods': rs.PERIODS})
+                    'report_keys': list(rs.REPORTS.items()), 'periods': rs.PERIODS,
+                    # Role Permissions screen: modules -> screens (with the actions each screen checks), modes, extras, limits
+                    'permissions': perm_catalog.labels(db.session().connection())})
 
 
 # ---------------------------------------------------------------- companies
@@ -493,14 +492,24 @@ def roles_full():
 
 
 def _role_payload(d, name):
+    """Validate a role change against the permission catalogue.
+    - an unknown screen key or action string is refused;
+    - keys some roles hold from the seed that no code checks (perm_catalog.LEGACY_KEYS) are skipped and left untouched;
+    - actions a screen never checks are dropped, so what is saved is exactly what is enforced."""
     perms = {}
     for key, acts in (d.get('permissions') or {}).items():
-        if key not in dict(SCREENS):
+        if key in perm_catalog.LEGACY_KEYS:
+            continue
+        if not perm_catalog.screen(key):
             raise bad(f'Unknown screen {key}.', 'invalid')
+        if not isinstance(acts, (list, tuple)):
+            raise bad(f'Actions for {key} must be a list.', 'invalid')
         bad_acts = set(acts) - set(ACTIONS)
         if bad_acts:
             raise bad(f'Unknown action(s): {", ".join(sorted(bad_acts))}.', 'invalid')
-        perms[key] = sorted(set(acts))
+        keep = sorted(set(acts) & perm_catalog.allowed(key))
+        if keep:
+            perms[key] = keep
     limits = {}
     for k, v in (d.get('limits') or {}).items():
         if k not in dict(LIMITS):
@@ -509,8 +518,14 @@ def _role_payload(d, name):
     rank = float(d.get('approval_rank') or 0)
     if rank < 0 or rank > 10:
         raise bad('Approval rank is 0-10 (0 = cannot approve).', 'invalid')
-    return {'name': name, 'description': str(d.get('description') or '').strip()[:200] or None, 'approval_rank': rank,
+    display = str(d.get('display_name') or '').strip()[:80] or None
+    return {'name': name, 'display_name': display, 'description': str(d.get('description') or '').strip()[:200] or None, 'approval_rank': rank,
             'read_only': 1 if d.get('read_only') else 0, 'active': 0 if d.get('active') is False else 1, 'permissions': perms, 'limits': limits}
+
+
+def _role_users(name):
+    return db.val('''SELECT COUNT(*) FROM users u WHERE u.status='Active' AND (u.main_role=:n OR EXISTS
+                     (SELECT 1 FROM user_roles r WHERE r.user_id=u.id AND r.role=:n))''', n=name) or 0
 
 
 @handler('mc:role')
@@ -522,11 +537,13 @@ def apply_role(p, apr):
         old = {'permissions': {}, 'limits': {}}
         for r in db.q('SELECT screen_key, action FROM permissions WHERE role=:n', n=name):
             old['permissions'].setdefault(r['screen_key'], []).append(r['action'])
-        db.run('UPDATE roles SET description=:d, approval_rank=:r, read_only=:o, active=:a WHERE name=:n', d=p['description'], r=p['approval_rank'],
-               o=p['read_only'], a=p['active'], n=name)
+        db.run('UPDATE roles SET display_name=:dn, description=:d, approval_rank=:r, read_only=:o, active=:a WHERE name=:n', dn=p.get('display_name'),
+               d=p['description'], r=p['approval_rank'], o=p['read_only'], a=p['active'], n=name)
     else:
-        db.insert('roles', dict(name=name, description=p['description'], approval_rank=p['approval_rank'], read_only=p['read_only'], is_custom=1, active=1))
-    db.run('DELETE FROM permissions WHERE role=:n', n=name)
+        db.insert('roles', dict(name=name, display_name=p.get('display_name'), description=p['description'], approval_rank=p['approval_rank'],
+                                read_only=p['read_only'], is_custom=1, active=1))
+    # replace only the catalogue screens: legacy keys from the seed stay as they were
+    db.run('DELETE FROM permissions WHERE role=:n AND screen_key IN :k', n=name, k=tuple(perm_catalog.screen_keys()))
     for key, acts in p['permissions'].items():
         for a in acts:
             db.insert('permissions', dict(role=name, screen_key=key, action=a))
@@ -543,6 +560,8 @@ def _role_change(name, d):
     if not reason:
         raise bad('Give the reason for this change.', 'reason_required')
     payload = _role_payload(d, name)
+    if not payload['active'] and _role_users(name):
+        raise conflict(f'{_role_users(name)} active user(s) still have the role {name}. Give them another role first.', 'role_in_use')
     if not mc_on('access'):
         return {'status': 'Applied', 'result': apply_role(payload, {'reason': reason})}, 200
     return mc_request('mc', f'Role · {name}', payload, route_role('mc', None, 0, 'Director'), sub_kind='role', reason=reason,
@@ -578,6 +597,25 @@ def role_update(name):
     if name == 'Super Admin':
         raise conflict('The Super Admin role is fixed so that the system can always be administered.', 'protected_role')
     out, code = _role_change(name, body())
+    return jsonify(out), code
+
+
+@bp.delete('/roles/<path:name>')
+@require('users', 'ctl')
+@high_risk('users')
+def role_deactivate(name):
+    """Switch a role off (it is kept for history: audit entries, old approvals). Refused while active users hold it."""
+    r = db.one('SELECT * FROM roles WHERE name=:n', n=name)
+    if not r:
+        raise not_found('Role not found.')
+    if name == 'Super Admin':
+        raise conflict('The Super Admin role is fixed so that the system can always be administered.', 'protected_role')
+    d = {'display_name': r.get('display_name'), 'description': r['description'], 'approval_rank': float(r['approval_rank'] or 0),
+         'read_only': bool(r['read_only']), 'active': False, 'reason': body().get('reason'), 'permissions': {}, 'limits': {}}
+    for p in db.q('SELECT screen_key, action FROM permissions WHERE role=:n', n=name):
+        d['permissions'].setdefault(p['screen_key'], []).append(p['action'])
+    d['limits'] = {x['limit_key']: float(x['amount']) for x in db.q('SELECT limit_key, amount FROM approval_limits WHERE role=:n', n=name)}
+    out, code = _role_change(name, d)
     return jsonify(out), code
 
 

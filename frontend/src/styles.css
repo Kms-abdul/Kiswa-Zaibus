@@ -599,3 +599,16 @@ ul.work a{border-radius:6px}
 .shop-top{background:var(--hdr) var(--pattern);color:var(--hdr-ink)} .shop-top small{color:var(--hdr-mut)} .shop-top .link{color:var(--hdr-ink)}
 .kids button.on{border-color:var(--ink2);background:var(--sunk)}
 .signin .brand{background:none;min-height:0;padding:0 0 6px;color:var(--ink)} .signin .brand small{color:var(--muted)}
+
+/* Role Permissions (pages/RolePermissions.tsx): modules as sections, one row per screen with its mode */
+.rp-mod{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:0 0 12px}
+.rp-mod-h{margin:0 0 8px;gap:8px;white-space:normal}
+.rp-row{display:grid;grid-template-columns:minmax(180px,1.4fr) minmax(130px,170px) 2fr;gap:6px 14px;align-items:center;padding:6px 0;border-top:1px solid var(--line)}
+.rp-row:first-of-type{border-top:0}
+.rp-name small{margin-left:6px;font-size:11px}
+.rp-acts{display:flex;flex-wrap:wrap;gap:4px 14px;grid-column:3}
+.rp-acts label.check{font-size:13px}
+.rp-extras{color:var(--muted)}
+@media (max-width:720px){.rp-row{grid-template-columns:1fr}.rp-acts{grid-column:1}}
+.rp-acts label.rp-na{opacity:.45;cursor:not-allowed}
+.rp-legend{flex-basis:100%;font-size:11.5px}

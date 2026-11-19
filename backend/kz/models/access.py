@@ -12,10 +12,32 @@ from .base import DT6, Base, created_at
 class Role(Base):
     __tablename__ = 'roles'
     name: Mapped[str] = mapped_column(String(60), primary_key=True)
+    display_name: Mapped[Optional[str]] = mapped_column(String(80))                   # shown to people; name stays the key
     description: Mapped[Optional[str]] = mapped_column(String(200))
     approval_rank: Mapped[Decimal] = mapped_column(Numeric(4, 2), server_default='0')   # 0 = cannot approve
     read_only: Mapped[bool] = mapped_column(server_default=text('0'))
     is_custom: Mapped[bool] = mapped_column(server_default=text('0'))
+    active: Mapped[bool] = mapped_column(server_default=text('1'))
+
+
+class PermModule(Base):
+    """Permission catalogue: a module (section on the Role Permissions screen). Synced from core/permission_catalog.py."""
+    __tablename__ = 'perm_modules'
+    key: Mapped[str] = mapped_column(String(40), primary_key=True)
+    label: Mapped[str] = mapped_column(String(80))
+    sort: Mapped[int] = mapped_column(Integer, server_default='0')
+    active: Mapped[bool] = mapped_column(server_default=text('1'))
+
+
+class PermScreen(Base):
+    """Permission catalogue: a screen key and the actions the code checks on it. Synced from core/permission_catalog.py."""
+    __tablename__ = 'perm_screens'
+    key: Mapped[str] = mapped_column(String(40), primary_key=True)
+    module_key: Mapped[str] = mapped_column(String(40))
+    label: Mapped[str] = mapped_column(String(120))
+    sort: Mapped[int] = mapped_column(Integer, server_default='0')
+    actions: Mapped[list] = mapped_column(JSON)
+    extras: Mapped[list] = mapped_column(JSON)
     active: Mapped[bool] = mapped_column(server_default=text('1'))
 
 

@@ -17,7 +17,7 @@ export default function Profile() {
   return (
     <Page title="My account">
       <Panel title="Details">
-        <Kv items={[['Name', me!.name], ['Employee ID', me!.emp_id], ['Role', [me!.role, ...me!.roles.filter(r => r !== me!.role)].join(', ')],
+        <Kv items={[['Name', me!.name], ['Employee ID', me!.emp_id], ['Role', [me!.role_label || me!.role, ...me!.roles.filter(r => r !== me!.role)].join(', ')],
           ['Companies', me!.companies.join(', ')], ['Locations', me!.branches === '*' ? 'All locations and Head Office' : (me!.branches as string[]).join(', ')]]} />
       </Panel>
       <Panel title="Change password">

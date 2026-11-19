@@ -131,7 +131,8 @@ def _start_session(u, pol, device_id):
 
 
 def me_payload(u):
-    return {'id': u['id'], 'name': u['name'], 'emp_id': u['emp_id'], 'role': u['main_role'], 'roles': u['roles'], 'designation': u['designation'],
+    label = db.val('SELECT COALESCE(display_name, name) FROM roles WHERE name=:n', n=u['main_role']) or u['main_role']
+    return {'id': u['id'], 'name': u['name'], 'emp_id': u['emp_id'], 'role': u['main_role'], 'role_label': label, 'roles': u['roles'], 'designation': u['designation'],
             'companies': u['companies'], 'branches': u['branches'], 'rank': u['rank'], 'read_only': u['read_only'],
             'permissions': {k: sorted(v) for k, v in u['perms'].items()}}
 

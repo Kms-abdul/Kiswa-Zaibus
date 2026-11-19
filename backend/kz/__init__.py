@@ -34,6 +34,7 @@ def create_app(config=Config):
         app.register_blueprint(bp)
     from .cli import register as register_cli
     register_cli(app)
+    _sync_permission_catalog(app)
 
     @app.before_request
     def json_only():
@@ -93,6 +94,17 @@ def _input_error(e):
     tb = traceback.extract_tb(e.__traceback__)
     ours = [f for f in tb if '/kz/' in f.filename.replace('\\', '/')]
     return bool(ours) and any(x in ours[-1].filename.replace('\\', '/') for x in ('/kz/api/', '/kz/services/', '/kz/core/'))
+
+
+def _sync_permission_catalog(app):
+    """Bring perm_modules / perm_screens in line with kz/core/permission_catalog.py, so a screen added in code shows up on the
+    Role Permissions screen after a restart. Never stops the app: before migration 0007, or with the database down, it only logs."""
+    from .core.permission_catalog import sync_catalog
+    try:
+        with db.engine().begin() as conn:
+            sync_catalog(conn)
+    except Exception as e:  # noqa: BLE001
+        app.logger.warning('Permission catalogue not synced at start-up (%s). Run migrations, then restart.', type(e).__name__)
 
 
 def _logging(app, config):

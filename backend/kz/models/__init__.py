@@ -2,7 +2,7 @@
 from .base import Base  # noqa: F401
 from .org import Branch, Company, Location, NumberSeries, Region, Setting, Zone  # noqa: F401
 from .access import (AccessSchedule, ApprovalLimit, LoginChallenge, ParentChallenge, ParentSession, PasswordHistory,  # noqa: F401
-                     Permission, Role, SecurityEvent, Session, User, UserBranch, UserCompany, UserDevice, UserRegion,
+                     Permission, PermModule, PermScreen, Role, SecurityEvent, Session, User, UserBranch, UserCompany, UserDevice, UserRegion,
                      UserRole, UserZone)
 from .control import (AccessLog, Alert, AlertRule, Approval, ApprovalLog, AuditHead, AuditLog, Evidence, Outbox,  # noqa: F401
                       RoutingRule)

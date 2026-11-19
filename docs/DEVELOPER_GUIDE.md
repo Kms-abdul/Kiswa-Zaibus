@@ -112,7 +112,27 @@ checks them on a live database.
 
 ## 5. Permissions and approvals
 
-* Screens (keys): `dash pos msea onl inv pur cash acc rep appr audit set ctl ctl.int ctl.pay saudit`.
+### The permission catalogue (dynamic roles, migration 0007)
+Every module, screen and action the code checks is listed once, in **`backend/kz/core/permission_catalog.py`**:
+`MODULES` (sections), `SCREENS` (key, module, label, the actions its code checks, the extras it checks), `MODES`
+(Read = view print pdf export; Write = Read + add edit submit cancel upload import; Full = Write + approve reject return
+reverse delete restore verify review post), `EXTRAS` (cost, fin, master, users, cfgrep, audit — ticked on their own) and `LIMITS`.
+It is copied into `perm_modules` / `perm_screens` by migration 0007 and again at **every start-up** (`flask kz sync-permissions`
+does the same by hand). **Setup → Roles & permissions** (`frontend/src/pages/RolePermissions.tsx`) is built from it: modules as
+sections, one row per screen with a mode (None / Read / Write / Full / Custom), extras as ticks, then approval limits.
+Saving drops actions a screen never checks; seed keys no code checks (`LEGACY_KEYS`) are left untouched.
+Roles have a `display_name` (shown in the header and profile); `name` stays the key. A role in use cannot be switched off.
+
+**Adding a new screen (or a whole module) so it can be given to roles:**
+1. Add one line to `SCREENS` in `permission_catalog.py` (and a line to `MODULES` for a new section), listing the actions its code checks.
+2. Protect the endpoints with `@require('<action>', '<key>')` and the frontend with `can('<action>', '<key>')`.
+3. Restart the backend. The screen appears on Role Permissions for every role, set to None until someone gives it a mode.
+A dotted key (`inv.transfers`) falls back to its module (`inv`) for roles that have no entry for it yet, so a module can be split
+into finer screens one at a time: add the screens, switch that module's checks to the new keys, and migrate each role's module
+grant onto the new keys so nobody loses or gains access.
+
+### Keys and actions
+* Screens (keys): see `SCREENS` in `kz/core/permission_catalog.py` (`pos msea onl inv saudit pur cash acc ctl.pay fin rep appr audit ctl ctl.users ctl.roles ctl.sec ctl.int set`).
   Actions: `view add edit submit approve reject return cancel reverse delete restore print pdf export import upload audit fin cost master cfgrep users verify review post`.
   Stock audits use `add` (create), `edit` (count), `submit`, `verify` (location in-charge), `review` (accounts / inventory),
   `approve`, `post` (adjustment), `restore` (reopen), `cost`/`fin` (see values), `export`/`pdf`; defaults in `services/stock_audit.PERMS`.
@@ -133,6 +153,7 @@ checks them on a live database.
 2. **Migration**: `alembic revision --autogenerate -m "..."`, review, `alembic upgrade head` (see MIGRATIONS.md).
 3. **Service**: the rule in `kz/services/<area>.py` — validate, check scope/lock/limits, post through ledger/stock, `audit.write`.
 4. **API**: a thin route in `kz/api/<area>.py` with `@require(action, screen)`; new module → add to `kz/api/__init__.py`.
+   A new screen key → add it to `SCREENS` in `kz/core/permission_catalog.py` so it can be given to roles (section 5).
 5. **Test**: a flow in `backend/tests/` (the invariants fixture checks books and stock for you).
 6. **Screen**: `frontend/src/pages/<Name>.tsx` using `ui/kit` components; route in `App.tsx`; menu entry in `Shell.tsx` (`NAV`).
 7. **Docs**: `python backend/scripts/gen_docs.py`; update USER_WORKFLOW.md if users see something new.
@@ -176,3 +197,15 @@ running it twice does no harm.
 Python: ruff (`pyproject.toml`: pyflakes + bugbear, 200 columns), f-strings, no bare `except`. SQL in text form uses named parameters only
 (`:name`) — never string-format user input. TypeScript: strict mode; `any` only for API payloads. Messages to users are
 full sentences that say what to do next.
+
+## 11. Git and vendor releases (local copy)
+
+This copy is tracked in git (`main` = the delivered release plus local changes; feature work on branches such as
+`feature/dynamic-roles`). Secrets and runtime data (`backend/.env`, `secrets/`, `data/`, `logs/`, database dumps) are in
+`.gitignore`; `.gitattributes` keeps LF line endings so `deploy/oci/*.sh` stay valid on Linux.
+
+To take a new vendor release without losing local changes:
+1. `git switch -c vendor/x.y main` and replace the tracked files with the unpacked release (do not copy `backend/.env`).
+2. Commit it on that branch: the diff shows exactly what the vendor changed.
+3. `git switch main` and `git merge vendor/x.y`; resolve conflicts (local changes such as the permission catalogue win
+   unless the vendor ships the same feature), run the tests, then `alembic upgrade head`.
