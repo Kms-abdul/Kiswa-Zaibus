@@ -1,0 +1,15 @@
+# Runtime
+Flask==3.0.3
+SQLAlchemy==2.0.35
+alembic==1.13.3
+PyMySQL==1.1.1
+cryptography==43.0.1
+bcrypt==4.2.0
+python-dotenv==1.0.1
+requests==2.32.3
+gunicorn==23.0.0
+openpyxl==3.1.5        # Excel exports and count-sheet uploads
+reportlab==4.2.5       # PDF stock-audit records
+chardet==5.2.0         # reportlab dependency, pinned to the version requests supports
+# Tests
+pytest==8.3.3

@@ -1,0 +1,27 @@
+{
+  "name": "kz-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Kiswa-Zaibus web gateway: serves the React app, proxies /api to Flask, verifies Razorpay webhooks, sends queued alerts, runs the scheduler.",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc -p .",
+    "start": "node dist/server.js",
+    "test": "node --test dist/test/razorpay.test.js"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "express": "4.21.2",
+    "express-rate-limit": "7.5.0",
+    "helmet": "8.0.0",
+    "http-proxy-middleware": "3.0.3",
+    "mysql2": "3.11.5",
+    "nodemailer": "6.9.16"
+  },
+  "devDependencies": {
+    "@types/express": "4.17.21",
+    "@types/node": "20.17.6",
+    "@types/nodemailer": "6.4.17",
+    "typescript": "5.6.3"
+  }
+}

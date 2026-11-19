@@ -1,0 +1,17 @@
+[Unit]
+Description=Kiswa-Zaibus scheduler tick (escalations, expiries, access changes, reminders, outbox send)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=kz
+Group=kz
+WorkingDirectory=/opt/kz-app/backend
+EnvironmentFile=/etc/kz/kz.env
+ExecStart=/opt/kz-app/backend/.venv/bin/flask --app wsgi kz tick
+TimeoutStartSec=50
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/kz /var/log/kz

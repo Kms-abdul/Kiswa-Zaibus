@@ -1,0 +1,25 @@
+[Unit]
+Description=Kiswa-Zaibus API (Flask on Gunicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=kz
+Group=kz
+WorkingDirectory=/opt/kz-app/backend
+EnvironmentFile=/etc/kz/kz.env
+ExecStart=/opt/kz-app/backend/.venv/bin/gunicorn -c gunicorn.conf.py wsgi:app
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=always
+RestartSec=3
+TimeoutStopSec=40
+# hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/kz /var/log/kz
+
+[Install]
+WantedBy=multi-user.target

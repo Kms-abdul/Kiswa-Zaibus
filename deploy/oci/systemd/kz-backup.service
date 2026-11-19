@@ -1,0 +1,11 @@
+[Unit]
+Description=Kiswa-Zaibus nightly backup (database dump + evidence files to OCI Object Storage)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/kz/kz.env
+EnvironmentFile=-/etc/kz/backup.env
+ExecStart=/opt/kz-app/deploy/oci/backup.sh
+TimeoutStartSec=3600

@@ -1,0 +1,30 @@
+[Unit]
+Description=Kiswa-Zaibus document renderer (Node.js: Excel / PDF exports, release 2.3)
+After=network-online.target
+Wants=network-online.target
+Before=kz-api.service
+
+[Service]
+Type=simple
+User=kz
+Group=kz
+WorkingDirectory=/opt/kz-app/docs-service
+EnvironmentFile=/etc/kz/kz.env
+# loopback only: nginx never exposes this port; Flask calls it with DOCS_SECRET and renders in Python if it is down
+Environment=DOCS_HOST=127.0.0.1
+Environment=DOCS_PORT=8095
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node /opt/kz-app/docs-service/dist/server.js
+Restart=always
+RestartSec=3
+MemoryMax=512M
+# hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
