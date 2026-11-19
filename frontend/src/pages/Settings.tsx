@@ -1,10 +1,11 @@
 /* Settings: policies (security, controls, maker-checker, escalation, online store, student categories, counters),
    books lock date, alert rules, ERP student import, and Razorpay status / reconciliation. */
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { co, day, inr, today, when } from '../format';
 import { Btn, DataTable, ErrorNote, Field, Kv, Page, Panel, Pill, Tabs, useAction, useLoad, useUrlState } from '../ui/kit';
+import ErpMapping from './ErpMapping';
 
 const KEYS: [string, string, string][] = [
   ['security', 'Security policy', 'Password length, lockout attempts, session timeout, OTP. Changes need approval when maker-checker is on.'],
@@ -91,22 +92,29 @@ function Erp() {
   const file = useRef<HTMLInputElement>(null);
   const [dry, setDry] = useState(true);
   const [run, busy] = useAction();
+  const running = (runs.data || []).some(r => r.status === 'Running');
+  useEffect(() => {                                   // a background pull is working: refresh the list every 3 s
+    if (!running) return;
+    const t = setInterval(() => runs.reload(), 3000);
+    return () => clearInterval(t);
+  }, [running]);  // eslint-disable-line react-hooks/exhaustive-deps
   const upload = async () => {
     const f = file.current?.files?.[0]; if (!f) return;
     const fd = new FormData(); fd.append('file', f); fd.append('dry_run', dry ? '1' : '0');
     if (await run(() => api('/erp/import', { form: fd }), (x: any) => `${x.run}: ${x.created} created, ${x.updated} updated, ${x.skipped} unchanged, ${x.failed} failed${x.dry_run ? ' (trial run — nothing saved)' : ''}.`)) runs.reload();
   };
   return <>
-    {can('import', 'ctl.int') && <Panel title="Import students from the MSEA ERP">
+    <ErpMapping onStarted={() => runs.reload()} />
+    {can('import', 'ctl.int') && <Panel title="Import students from a CSV file">
       <p className="muted">CSV columns: <span className="mono">{tpl.data?.columns?.join(', ')}</span>. Re-importing the same file updates instead of duplicating.</p>
       <div className="row"><input ref={file} type="file" accept=".csv,text/csv" aria-label="CSV file" />
         <label className="check"><input type="checkbox" checked={dry} onChange={e => setDry(e.target.checked)} />Trial run first</label>
-        <Btn kind="pri" busy={busy} onClick={upload}>Upload</Btn>
-        <Btn busy={busy} onClick={async () => { if (await run(() => api('/erp/sync', { body: {} }), (x: any) => `${x.run}: ${x.created} created, ${x.updated} updated.`)) runs.reload(); }}>Pull from ERP API</Btn></div>
+        <Btn kind="pri" busy={busy} onClick={upload}>Upload</Btn></div>
     </Panel>}
     <Panel title="Sync runs"><DataTable rows={runs.data} onRow={setSel} cols={[{ key: 'no', label: 'Run', primary: true }, { key: 'started_at', label: 'Started', render: r => when(r.started_at) },
-      { key: 'trigger_type', label: 'How' }, { key: 'created', label: 'New', align: 'r' }, { key: 'updated', label: 'Updated', align: 'r' }, { key: 'failed', label: 'Failed', align: 'r' },
-      { key: 'status', label: 'Status', render: r => <Pill s={r.status} tone={r.failed ? 'warn' : 'ok'} /> }]} /></Panel>
+      { key: 'trigger_type', label: 'How', render: r => r.trigger_type + (r.dry_run ? ' · trial' : '') }, { key: 'created', label: 'New', align: 'r' },
+      { key: 'updated', label: 'Updated', align: 'r' }, { key: 'skipped', label: 'Unchanged', align: 'r' }, { key: 'failed', label: 'Failed', align: 'r' },
+      { key: 'status', label: 'Status', render: r => <Pill s={r.status} tone={r.status === 'Running' ? 'info' : r.status === 'Failed' ? 'bad' : r.failed ? 'warn' : 'ok'} /> }]} /></Panel>
     {sel && <Panel title={`Records of ${sel.no}`} actions={<Btn onClick={() => setSel(null)}>Close</Btn>}><DataTable rows={recs.data} cols={[{ key: 'source_ref', label: 'ERP ref', primary: true },
       { key: 'action', label: 'Action' }, { key: 'status', label: 'Status' }, { key: 'error', label: 'Error' }]} /></Panel>}
   </>;

@@ -63,6 +63,9 @@ class Config:
     # MSEA ERP connector (students). Empty URL = file import only.
     ERP_API_URL = os.getenv('ERP_API_URL', '')
     ERP_API_TOKEN = os.getenv('ERP_API_TOKEN', '')
+    # MCB Read-Only API (views): the key travels in this header; set only here, never on a screen
+    ERP_API_KEY = os.getenv('ERP_API_KEY', '')
+    ERP_API_KEY_HEADER = os.getenv('ERP_API_KEY_HEADER', 'x-api-key')
 
     @classmethod
     def db_url(cls, name=None):

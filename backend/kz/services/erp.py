@@ -1,6 +1,7 @@
 """MSEA ERP sync (students). Two sources, same upsert:
   * file:  CSV upload (Settings -> ERP sync) with the columns in STUDENT_COLUMNS
-  * api:   GET {ERP_API_URL}/students?updated_since=<iso> with Bearer ERP_API_TOKEN, returning a JSON list of the same fields
+  * api:   with a saved column mapping: the MCB Read-Only views API (services/erp_api.py, background pull);
+           otherwise GET {ERP_API_URL}/students?updated_since=<iso> with Bearer ERP_API_TOKEN, returning a JSON list of the same fields
 Each ERP record is keyed by erp_ref in erp_keys with a hash of its content: unchanged records are skipped, changed ones
 updated, new ones created, so repeated syncs never duplicate. Every row is logged in erp_sync_records.
 """
@@ -56,11 +57,20 @@ def _validate(r):
     return None
 
 
-def upsert_students(rows, *, trigger, by, dry_run=False):
-    run_no = next_no('HO', 'ERP')
-    run_id = db.insert('erp_sync_runs', dict(no=run_no, triggered_by=by, trigger_type=trigger, feeds='students', dry_run=1 if dry_run else 0, status='Running'))
+def upsert_students(rows, *, trigger, by, dry_run=False, run_id=None, commit_every=0):
+    """run_id: a run row created beforehand (background pulls); commit_every: commit and publish the counts every N rows,
+    so a long pull is visible on the screen while it works."""
+    if run_id is None:
+        run_no = next_no('HO', 'ERP')
+        run_id = db.insert('erp_sync_runs', dict(no=run_no, triggered_by=by, trigger_type=trigger, feeds='students', dry_run=1 if dry_run else 0, status='Running'))
+    else:
+        run_no = db.val('SELECT no FROM erp_sync_runs WHERE id=:i', i=run_id)
     counts = {'created': 0, 'updated': 0, 'skipped': 0, 'failed': 0}
-    for raw in rows:
+    for n, raw in enumerate(rows, 1):
+        if commit_every and n % commit_every == 0:
+            db.run('UPDATE erp_sync_runs SET created=:c, updated=:u, skipped=:s, failed=:f WHERE id=:i',
+                   c=counts['created'], u=counts['updated'], s=counts['skipped'], f=counts['failed'], i=run_id)
+            db.session().commit()
         r = _norm(raw)
         err = _validate(r)
         ref = r.get('erp_ref') or r.get('adm_no') or '?'
@@ -124,7 +134,12 @@ def import_csv(data: bytes, by, dry_run=False):
     return upsert_students(rows, trigger='file', by=by, dry_run=dry_run)
 
 
-def pull_api(by, since=None):
+def pull_api(by, since=None, dry_run=False):
+    """With a saved column mapping and ERP_API_KEY: the MCB views API, in the background (services/erp_api.py).
+    Otherwise the original connector: GET {ERP_API_URL}/students with a Bearer token, already in our column names."""
+    from . import erp_api
+    if erp_api.load_mapping() and Config.ERP_API_KEY:
+        return erp_api.start_pull(by, dry_run=dry_run)
     if not Config.ERP_API_URL:
         raise ApiError(409, 'erp_not_configured', 'ERP_API_URL is not set on the server. Use the CSV import, or configure the connector.')
     try:
@@ -137,4 +152,4 @@ def pull_api(by, since=None):
         raise ApiError(502, 'erp_unreachable', f'The ERP could not be reached or returned bad data ({type(e).__name__}).')
     if isinstance(rows, dict):
         rows = rows.get('items') or rows.get('students') or []
-    return upsert_students(rows, trigger='api', by=by)
+    return upsert_students(rows, trigger='api', by=by, dry_run=dry_run)

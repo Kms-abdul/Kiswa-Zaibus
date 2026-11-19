@@ -612,3 +612,11 @@ ul.work a{border-radius:6px}
 @media (max-width:720px){.rp-row{grid-template-columns:1fr}.rp-acts{grid-column:1}}
 .rp-acts label.rp-na{opacity:.45;cursor:not-allowed}
 .rp-legend{flex-basis:100%;font-size:11.5px}
+
+/* ERP column mapping (pages/ErpMapping.tsx) */
+.erp-map{border:1px solid var(--line);border-radius:8px;padding:4px 12px;margin:0 0 12px}
+.erp-row{display:grid;grid-template-columns:minmax(200px,1.3fr) minmax(150px,180px) minmax(160px,1fr) auto;gap:6px 12px;align-items:center;padding:7px 0;border-top:1px solid var(--line)}
+.erp-row:first-child{border-top:0}
+.erp-name small{margin-left:6px;font-size:11px} .erp-name .req{color:var(--bad)}
+.erp-more{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px 14px;padding:4px 0 6px}
+@media (max-width:760px){.erp-row{grid-template-columns:1fr}}
