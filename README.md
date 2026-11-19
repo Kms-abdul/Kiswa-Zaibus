@@ -148,3 +148,5 @@ Health of a running system: `flask --app wsgi kz doctor`.
 
 ## Change the database schema
 Edit the models in `backend/kz/models/`, then `alembic revision --autogenerate -m "what changed"`, review the file, `alembic upgrade head`, and commit it. Never edit a migration that has already run in production.
+#   K i s w a - Z a i b u s  
+ 
