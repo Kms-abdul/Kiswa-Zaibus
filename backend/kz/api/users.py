@@ -9,12 +9,12 @@ from flask import Blueprint, g, jsonify, request
 
 from .. import db
 from ..core import audit, notify
-from ..core.approvals import handler, mc_on, on_reject, request as mc_request
+from ..core.approvals import handler, needs_second_person, on_reject, request as mc_request
 from ..config import Config
 from ..errors import bad, conflict, denied, not_found
-from ..core.rbac import body, high_risk, require
+from ..core.rbac import body, high_risk, is_super, require
 from ..core.routing import route_role
-from ..core.security import hash_pw
+from ..core.security import hash_pw, policy_errors, set_password
 
 bp = Blueprint('users', __name__, url_prefix='/api/users')
 STATUSES = ('Active', 'Inactive', 'Locked', 'Suspended', 'Resigned')
@@ -99,16 +99,24 @@ def apply_create(p, apr):
         raise conflict('A user with this employee ID or mobile was created meanwhile.')
     n = (db.val("SELECT MAX(CAST(SUBSTRING(id, 2) AS UNSIGNED)) FROM users WHERE id REGEXP '^u[0-9]+$'") or 0) + 1
     uid = f'u{n}'
-    temp = _temp_password()
-    row = dict(f, id=uid, pw_hash=hash_pw(temp), pw_set_at=dt.datetime.now(), pw_must_change=1, status=f.get('status') or 'Active')
+    given = p.get('pw_hash')     # first password chosen by the administrator (only its hash is ever stored, even in the approval)
+    temp = None if given else _temp_password()
+    row = dict(f, id=uid, pw_hash=given or hash_pw(temp), pw_set_at=dt.datetime.now(), pw_must_change=1, status=f.get('status') or 'Active')
     db.insert('users', row)
     db.insert('password_history', dict(user_id=uid, pw_hash=row['pw_hash']))
     _apply_scope(uid, scope)
-    notify.queue('sms', f['mobile'], None, f'Kiswa-Zaibus: your account {f["emp_id"]} is ready. Temporary password: {temp} (change it at first sign-in).',
-                 f['name'], 'OTP')
-    audit.write('User created', f['name'], new={**f, **scope}, reason=apr['reason'], category='security', status='Approved')
-    if Config.OTP_DEMO:          # test mode only: handed back in the HTTP response, never stored in approvals or the audit log
+    if given:
+        notify.queue('sms', f['mobile'], None, f'Kiswa-Zaibus: your account {f["emp_id"]} is ready. Your administrator will give you the first '
+                     'password; you will choose your own at first sign-in.', f['name'], 'OTP')
+    else:
+        notify.queue('sms', f['mobile'], None, f'Kiswa-Zaibus: your account {f["emp_id"]} is ready. Temporary password: {temp} (change it at first sign-in).',
+                     f['name'], 'OTP')
+    audit.write('User created', f['name'], new={**f, **scope, 'first_password': 'set by administrator' if given else 'generated'},
+                reason=apr['reason'], category='security', status='Approved')
+    if temp and Config.OTP_DEMO:  # test mode only: handed back in the HTTP response, never stored in approvals or the audit log
         g.dev_temp_password = temp
+    if given:
+        return f'User {uid} created with the password you set; they must change it at first sign-in'
     return f'User {uid} created; temporary password sent to ••••••{f["mobile"][-4:]}'
 
 
@@ -173,8 +181,16 @@ def create_user():
     f, scope = _validate(d)
     f['all_branches'] = 1 if d.get('all_branches') else 0
     payload = {'fields': f, 'scope': scope}
+    pw = d.get('password')
+    if pw not in (None, ''):
+        if not isinstance(pw, str):
+            raise bad('Password must be text.', 'invalid_input')
+        errs = policy_errors(pw, f)
+        if errs:
+            raise bad('Password must have ' + ', '.join(errs) + '.', 'weak_password')
+        payload['pw_hash'] = hash_pw(pw)
     sa = _grants_super_admin(f, scope)
-    if not mc_on('access'):
+    if not needs_second_person('access', route_role('mc', None, 0, 'Director'), super_admin_only=sa):
         if sa and 'Super Admin' not in g.user['roles']:
             raise denied('Only a Super Admin can grant Super Admin.')
         out = {'status': 'Applied', 'result': apply_create(payload, {'reason': reason})}
@@ -205,7 +221,7 @@ def update_user(uid):
         f['all_branches'] = 1 if d['all_branches'] else 0
     payload = {'id': uid, 'fields': f, 'scope': scope}
     sa = _grants_super_admin(f, scope) or cur['main_role'] == 'Super Admin'
-    if not mc_on('access'):
+    if not needs_second_person('access', route_role('mc', None, 0, 'Director'), super_admin_only=sa):
         if sa and 'Super Admin' not in g.user['roles']:
             raise denied('Only a Super Admin can change Super Admin access.')
         return jsonify({'status': 'Applied', 'result': apply_update(payload, {'reason': reason})})
@@ -227,10 +243,41 @@ def unlock(uid):
     if not reason:
         raise bad('Please give a reason.', 'reason_required')
     payload = {'id': uid, 'fields': {'status': 'Active'}, 'scope': {}}
-    if not mc_on('access'):
+    if not needs_second_person('access', route_role('mc', None, 0, 'Director')):
         return jsonify({'status': 'Applied', 'result': apply_update(payload, {'reason': reason})})
     return jsonify(mc_request('mc', f'Unlock account · {cur["name"]}', payload, route_role('mc', None, 0, 'Director'), sub_kind='user_update',
                               reason=reason, signature=f'user:unlock:{uid}')), 202
+
+
+@bp.post('/<uid>/password')
+@require('users', 'ctl.users')
+@high_risk('users')
+def reset_password(uid):
+    """Super Admin sets a new password for a user (forgotten password, new phone, handover). By default the user must change it at
+    the next sign-in. Unlocks a locked account and ends the user's open sessions. The password is never stored or logged in clear."""
+    if not is_super(g.user):
+        raise denied('Only a Super Admin can reset another user\'s password.', 'super_admin_only')
+    if uid == g.user['id']:
+        raise denied('Change your own password under My account.', 'self_change')
+    cur = db.one('SELECT * FROM users WHERE id=:i', i=uid)
+    if not cur:
+        raise not_found('User not found.')
+    d = body()
+    reason = str(d.get('reason') or '').strip()
+    if not reason:
+        raise bad('Please give a reason for the password reset.', 'reason_required')
+    pw = d.get('password')
+    if not isinstance(pw, str) or not pw:
+        raise bad('Enter the new password.', 'password_required')
+    must_change = d.get('must_change', True) is not False
+    set_password(cur, pw, must_change=must_change)        # policy + last-N history check, failed_count reset
+    db.run("UPDATE users SET status=IF(status='Locked','Active',status), locked_at=NULL, lock_reason=NULL WHERE id=:i", i=uid)
+    ended = db.run("UPDATE sessions SET ended_at=NOW(6), end_reason='Password reset by administrator' WHERE user_id=:u AND ended_at IS NULL",
+                   u=uid).rowcount
+    audit.write('Password reset by administrator', cur['name'], new={'must_change_at_next_sign_in': must_change, 'sessions_ended': ended},
+                reason=reason, category='security', status='Done')
+    return jsonify({'status': 'Applied', 'must_change': must_change, 'sessions_ended': ended,
+                    'result': f"Password reset for {cur['name']}" + ('; they must change it at the next sign-in' if must_change else '')})
 
 
 @bp.post('/<uid>/sessions/end')
@@ -299,10 +346,11 @@ def schedule_add(uid):
         data['branches'] = brs
     if db.val("SELECT COUNT(*) FROM access_schedule WHERE user_id=:u AND status IN ('Scheduled','Pending approval') AND effective_on=:e", u=uid, e=eff):
         raise conflict('A change is already scheduled for this user on that date.', 'duplicate_request')
+    second = needs_second_person('access', route_role('mc', None, 0, 'Director'))
     sid = db.insert('access_schedule', dict(user_id=uid, change_type=kind, effective_on=eff, data=data, reason=reason,
-                                            status='Pending approval' if mc_on('access') else 'Scheduled', requested_by=g.user['id']))
+                                            status='Pending approval' if second else 'Scheduled', requested_by=g.user['id']))
     payload = {'id': sid, 'user': u['name'], 'change_type': kind, 'effective_on': str(eff), **data}
-    if not mc_on('access'):
+    if not second:
         audit.write('Access change scheduled', u['name'], new=payload, reason=reason, category='security')
         return jsonify({'id': sid, 'status': 'Scheduled'}), 201
     a = mc_request('mc', f'{kind} · {u["name"]} on {eff}', payload, route_role('mc', None, 0, 'Director'), sub_kind='access_sched', reason=reason,

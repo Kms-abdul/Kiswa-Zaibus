@@ -4,7 +4,7 @@ from flask import Blueprint, g, jsonify
 
 from .. import db
 from ..core import audit
-from ..core.approvals import handler, mc_on, request as approval_request
+from ..core.approvals import handler, needs_second_person, request as approval_request
 from ..core.rbac import body, high_risk, login_required, require
 from ..core.security import setting
 from ..errors import bad, not_found
@@ -45,7 +45,7 @@ def update(key):
         if int(value.get('minLen', 10)) < 8 or int(value.get('maxFail', 5)) < 3:
             raise bad('Passwords need at least 8 characters and lockout at least 3 attempts.', 'weak_policy')
     old = setting(key)
-    if key in NEEDS_APPROVAL and mc_on('cfg'):
+    if key in NEEDS_APPROVAL and needs_second_person('cfg'):
         a = approval_request('mc', f'Change setting: {key}', {'key': key, 'value': value}, 'Director', sub_kind='cfg', reason=reason, signature=f'cfg:{key}')
         return jsonify(a), 202
     _apply(key, value)

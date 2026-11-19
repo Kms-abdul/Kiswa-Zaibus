@@ -88,6 +88,34 @@ def mc_on(sub_kind):
     return bool((setting('maker_checker', {}) or {}).get(sub_kind, True))
 
 
+def second_approver_exists(required_role, super_admin_only=False):
+    """Is there any active user, other than the one asking, who could approve a request routed to `required_role`?
+    Uses the same rules as deciding (why_not): approve on Approvals, rank, read-only, all-location scope for Head Office requests."""
+    from .rbac import load_user
+    me = g.user['id'] if g.get('user') else None
+    rank = role_rank(required_role)
+    ids = db.q('''SELECT DISTINCT u.id FROM users u
+                  LEFT JOIN user_roles ur ON ur.user_id=u.id
+                  JOIN roles r ON r.active=1 AND (r.name=u.main_role OR r.name=ur.role)
+                  WHERE u.status='Active' AND (:me IS NULL OR u.id<>:me) AND (r.approval_rank>=:rank OR r.name='Super Admin')''', me=me, rank=rank)
+    probe = {'status': 'Pending', 'requested_by': me, 'super_admin_only': 1 if super_admin_only else 0, 'required_role': required_role,
+             'branch_id': None, 'company': None}
+    return any((u := load_user(r['id'])) and why_not(u, probe) is None for r in ids)
+
+
+def needs_second_person(sub_kind, required_role='Director', super_admin_only=False):
+    """Maker-checker for a master change (roles, users, settings, prices). It applies only when it can work: if it is switched on
+    but nobody else can approve yet (e.g. a fresh install with only the Super Admin), the change applies at once and the audit
+    trail records why. As soon as a second approver exists, changes go for approval again — no setting to remember."""
+    if not mc_on(sub_kind):
+        return False
+    if second_approver_exists(required_role, super_admin_only):
+        return True
+    audit.write('Maker-checker skipped: no other approver yet', sub_kind, new=f'needs {required_role}; no other active user can approve',
+                category='security')
+    return False
+
+
 def _key(a):
     return f"{a['kind']}:{a['sub_kind']}" if a['sub_kind'] else a['kind']
 

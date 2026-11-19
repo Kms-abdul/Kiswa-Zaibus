@@ -18,7 +18,7 @@ from flask import Blueprint, g, jsonify, request
 from .. import db
 from ..core import audit
 from ..core import permission_catalog as perm_catalog
-from ..core.approvals import handler, mc_on, request as mc_request
+from ..core.approvals import handler, needs_second_person, request as mc_request
 from ..core.rbac import body, can, high_risk, login_required, require
 from ..core.routing import route_role
 from ..errors import bad, conflict, denied, not_found
@@ -562,7 +562,7 @@ def _role_change(name, d):
     payload = _role_payload(d, name)
     if not payload['active'] and _role_users(name):
         raise conflict(f'{_role_users(name)} active user(s) still have the role {name}. Give them another role first.', 'role_in_use')
-    if not mc_on('access'):
+    if not needs_second_person('access', route_role('mc', None, 0, 'Director')):
         return {'status': 'Applied', 'result': apply_role(payload, {'reason': reason})}, 200
     return mc_request('mc', f'Role · {name}', payload, route_role('mc', None, 0, 'Director'), sub_kind='role', reason=reason,
                       super_admin_only=False, signature=f'role:{name}'), 202

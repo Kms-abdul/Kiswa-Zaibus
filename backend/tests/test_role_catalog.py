@@ -100,3 +100,22 @@ def test_unknown_screen_and_deactivate_rules(app):
     if sql("SELECT COUNT(*) n FROM approvals WHERE status='Pending' AND title LIKE %s", '%Temp Role%')[0]['n']:
         approve_latest(app)
     assert sql("SELECT active FROM roles WHERE name='Temp Role'")[0]['active'] == 0
+
+
+def test_maker_checker_never_deadlocks(app):
+    """Fresh install with only the Super Admin: a role change applies at once (and says why in the audit trail) instead of waiting
+    for an approver who does not exist. With a Director active again, the same change goes for approval."""
+    s = as_user(app, SUPER)
+    me = sql('SELECT id FROM users WHERE emp_id=%s', SUPER)[0]['id']
+    before = sql("SELECT id, status FROM users WHERE status='Active' AND id<>%s", me)
+    try:
+        sql("UPDATE users SET status='Inactive' WHERE status='Active' AND id<>%s", me)
+        r = s.post('/api/setup/roles', json={'name': 'Solo Role', 'reason': 'first role on a fresh install', 'permissions': {'rep': ['view']}})
+        assert r.status_code == 201 and r.get_json()['status'] == 'Applied', r.get_json()
+        assert sql("SELECT COUNT(*) n FROM audit_log WHERE action='Maker-checker skipped: no other approver yet'")[0]['n'] >= 1
+    finally:
+        for u in before:
+            sql('UPDATE users SET status=%s WHERE id=%s', u['status'], u['id'])
+    r = s.put('/api/setup/roles/Solo Role', json={'reason': 'now a Director can check it', 'permissions': {'rep': ['view', 'export']}})
+    assert r.status_code == 202                                                      # an approver exists again: maker-checker applies
+    approve_latest(app)

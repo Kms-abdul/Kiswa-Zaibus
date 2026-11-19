@@ -5,7 +5,7 @@ from flask import Blueprint, g, jsonify, request
 
 from .. import db
 from ..core import audit
-from ..core.approvals import handler, mc_on, request as mc_request
+from ..core.approvals import handler, needs_second_person, request as mc_request
 from ..core.isbn import check as isbn_check
 from ..core.rbac import body, can, company_ok, login_required, require
 from ..core.routing import route_role
@@ -216,7 +216,7 @@ def price_change():
         clean.append({'id': it.id, 'name': it.name, 'old': float(it.price), 'price': price, 'gst_rate': r.get('gst_rate')})
         cos.add(it.company)
     payload = {'rows': clean}
-    if not mc_on('price'):
+    if not needs_second_person('price', route_role('mc', None, 0, 'CFO')):
         return jsonify({'status': 'Applied', 'result': apply_price(payload, {'reason': reason})})
     res = mc_request('mc', f'Price change · {len(clean)} item(s)', payload, route_role('mc', None, 0, 'CFO'), sub_kind='price',
                      company=cos.pop() if len(cos) == 1 else None, reason=reason,
