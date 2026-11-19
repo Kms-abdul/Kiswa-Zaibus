@@ -22,13 +22,15 @@ const ACTION_HELP: Record<string, string> = {
 };
 const same = (a: string[], b: string[]) => a.length === b.length && a.every(x => b.includes(x));
 
-/** The modes a screen can really have: mode actions limited to what the screen checks, duplicates (same set) removed. */
+/** The modes a screen can really have: mode actions limited to what the screen checks. When a higher mode gives nothing more
+ *  on this screen (e.g. billing has no approve / reverse actions, so Full = Write), the two are one option labelled "Write (= Full)". */
 function screenModes(s: Screen, cat: Catalog) {
   const out: { key: string; label: string; actions: string[] }[] = [];
   for (const m of cat.modes) {
     const acts = m.actions.filter(a => s.actions.includes(a));
     if (m.key !== 'none' && !acts.length) continue;
-    if (out.some(o => same(o.actions, acts))) continue;
+    const dup = out.find(o => o.key !== 'none' && same(o.actions, acts));
+    if (dup) { dup.label = dup.label.replace(/ \(= .*\)$/, '') + ` (= ${m.label})`; continue; }
     out.push({ key: m.key, label: m.label, actions: acts });
   }
   return out;
