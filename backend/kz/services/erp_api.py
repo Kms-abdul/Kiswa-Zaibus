@@ -249,7 +249,9 @@ def fetch_changes(spec, state, stop=None):
 
 
 def _signature(spec):
-    return hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()
+    """What decides WHICH rows a pull reads (view, filters, tracked dates). Changing how a column maps does not lock "Pull changes"."""
+    key = {k: spec.get(k) for k in ('view', 'filters', 'track')}
+    return hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()
 
 
 def load_state(spec=None):
@@ -402,14 +404,27 @@ def save_mapping(spec, user):
 
 
 # ---------------------------------------------------------------- the pull (background)
-def start_pull(by, dry_run=False, mode='auto'):
-    """mode: 'full' (every row), 'changes' (only rows created / changed since the last pull), 'auto' (changes when possible)."""
+def start_pull(by, dry_run=False, mode='auto', since=None):
+    """mode: 'full' (every row), 'changes' (only rows created / changed since the last pull), 'auto' (changes when possible).
+    since: a date (YYYY-MM-DD): only rows created / changed from that day on, without needing a full pull first."""
     spec = load_mapping()
     if not spec:
         raise conflict('Save the column mapping first (Settings → ERP import → API connection).', 'no_mapping')
     if not configured():
         raise ApiError(409, 'erp_key_missing', 'ERP_API_URL and ERP_API_KEY must be set in backend/.env.')
     state = load_state(spec)
+    if since:
+        if not spec.get('track'):
+            raise conflict('Choose the change-tracking date columns (step 4) and save the mapping first.', 'no_tracking')
+        try:
+            day = dt.datetime.strptime(str(since)[:10], '%Y-%m-%d')
+        except ValueError:
+            raise bad('Give the date as YYYY-MM-DD.', 'bad_date') from None
+        if day > dt.datetime.now():
+            raise bad('The date cannot be in the future.', 'bad_date')
+        # start from that day (the one-day overlap is added back so the day itself is read in full)
+        state = {'max': {k: (day + OVERLAP).isoformat() for k in spec['track']}, 'full_at': (state or {}).get('full_at'), 'since': day.date().isoformat()}
+        mode = 'changes'
     can_changes = bool(spec.get('track')) and bool(state and state.get('max'))
     if mode == 'auto':
         mode = 'changes' if can_changes else 'full'
@@ -492,7 +507,7 @@ def _job(app, run_id, by, spec, dry_run, mode='full', state=None):
             erp.upsert_students(rows, trigger='api', by=by, dry_run=dry_run, run_id=run_id, commit_every=500, stop=stop)
             if not dry_run and track:
                 _save_state(spec, maxima, full=(mode == 'full'), old=state)
-            what = 'changes since the last pull' if mode == 'changes' else 'all rows'
+            what = (f"changes since {state['since']}" if (state or {}).get('since') else 'changes since the last pull') if mode == 'changes' else 'all rows'
             _progress(run_id, f'students · {what}: {len(rows):,} rows')
             db.finish(True)
         except Stopped:

@@ -242,3 +242,26 @@ def test_filter_with_several_values_reads_each(app, fake):
         assert len(list(erp_api.fetch_rows(VIEW, clean['filters'], page_size=5, max_rows=7))) == 7
     years = [p['AcademicYear'] for path, p in fake.calls if path == f'/views/{VIEW}']
     assert years[:4] == ['2026-2027'] * 3 + ['2027-2028']              # one value per request, in the order written
+
+
+def test_pull_changes_since_a_date_needs_no_full_pull(app, fake):
+    s = as_user(app, SUPER)
+    tracked = dict(MAPPING, track={'changed': 'LastModified', 'created': 'Created'})
+    ok(s.put('/api/erp/api/mapping', json={'mapping': tracked}))
+    assert s.post('/api/erp/sync', json={'since': '2999-01-01'}).get_json()['error'] == 'bad_date'
+    assert s.post('/api/erp/sync', json={'since': '21/11/2026'}).get_json()['error'] == 'bad_date'
+    now = dt.datetime(2026, 11, 21, 9, 0).isoformat()                   # next year's admissions, added this week
+    for j in (1, 2):
+        fake.rows.append({**fake.rows[0], 'EnrollmentCode': f'27NEW{j:04d}', 'FatherMobile': f'97{j:08d}', 'AcademicYear': '2026-2027',
+                          'Created': now, 'LastModified': now})
+    before = len(fake.calls)
+    r = ok(s.post('/api/erp/sync', json={'since': '2026-11-20'}))
+    assert r['mode'] == 'changes'
+    st = wait_run(r['run'])
+    assert (st['created'], st['updated'], st['failed']) == (2, 0, 0)
+    assert len([p for path, p in fake.calls[before:] if path == f'/views/{VIEW}']) == 2   # not the 1,200-row view
+    assert ok(s.get('/api/erp/api/status'))['sync']['changes_ready']     # from now on plain "Pull changes" works
+
+    tracked['fields'] = {**tracked['fields'], 'section': {'const': 'A'}}  # changing how a column maps keeps it working
+    ok(s.put('/api/erp/api/mapping', json={'mapping': tracked}))
+    assert ok(s.get('/api/erp/api/status'))['sync']['changes_ready']

@@ -47,6 +47,7 @@ export default function ErpMapping({ onStarted }: { onStarted: () => void }) {
   const [filters, setFilters] = useState<{ col: string; val: string }[]>([]);
   const [track, setTrack] = useState<{ changed: string; created: string }>({ changed: '', created: '' });
   const [prev, setPrev] = useState<any>(null);
+  const [since, setSince] = useState('');
   const [run, busy] = useAction();
   const defs: FieldDef[] = saved.data?.fields || [];
   const ready = st.data?.configured && st.data?.key_set;
@@ -70,9 +71,9 @@ export default function ErpMapping({ onStarted }: { onStarted: () => void }) {
   const preview = () => run(() => api('/erp/api/preview', { body: { mapping: spec } }).then(r => { setPrev(r); return r; }),
     (r: any) => `${r.rows.length} row(s) previewed; ${r.rows.filter((x: any) => x.problem).length} with a problem.`);
   const save = async () => { if (await run(() => api('/erp/api/mapping', { method: 'PUT', body: { mapping: spec } }), () => 'Mapping saved.')) { saved.reload(); st.reload(); } };
-  const pull = async (dry: boolean, mode: 'full' | 'changes') => {
-    if (await run(() => api('/erp/sync', { body: { dry_run: dry, mode } }), (x: any) => (x.status === 'Running'
-      ? `${x.run} started (${mode === 'changes' ? 'only changes since the last pull' : 'all rows'})${dry ? ', trial run: nothing is saved' : ''}. Progress shows in Sync runs below.`
+  const pull = async (dry: boolean, mode: 'full' | 'changes', from?: string) => {
+    if (await run(() => api('/erp/sync', { body: { dry_run: dry, mode, since: from || undefined } }), (x: any) => (x.status === 'Running'
+      ? `${x.run} started (${from ? `only students added or changed since ${from}` : mode === 'changes' ? 'only changes since the last pull' : 'all rows'})${dry ? ', trial run: nothing is saved' : ''}. Progress shows in Sync runs below.`
       : `${x.run}: ${x.created} created, ${x.updated} updated.`))) { onStarted(); st.reload(); }
   };
   const sync = st.data?.sync || {};
@@ -168,6 +169,11 @@ export default function ErpMapping({ onStarted }: { onStarted: () => void }) {
             <Btn busy={busy} onClick={() => pull(false, 'full')}>Full pull</Btn>
             <Btn busy={busy} onClick={() => pull(true, sync.changes_ready ? 'changes' : 'full')}>Trial run</Btn>
           </div>
+          {sync.tracking && <div className="row">
+            <Field label="Or: only students added or changed since" hint="no full pull needed, e.g. after adding a year to the filter">
+              <input type="date" value={since} max={new Date().toISOString().slice(0, 10)} onChange={e => setSince(e.target.value)} /></Field>
+            <Btn busy={busy} disabled={!since} onClick={() => pull(false, 'changes', since)}>Pull changes since this date</Btn>
+          </div>}
         </>}
       </>}
     </>}
