@@ -147,12 +147,12 @@ def import_csv(data: bytes, by, dry_run=False):
     return upsert_students(rows, trigger='file', by=by, dry_run=dry_run)
 
 
-def pull_api(by, since=None, dry_run=False):
+def pull_api(by, since=None, dry_run=False, mode='auto'):
     """With a saved column mapping and ERP_API_KEY: the MCB views API, in the background (services/erp_api.py).
     Otherwise the original connector: GET {ERP_API_URL}/students with a Bearer token, already in our column names."""
     from . import erp_api
     if erp_api.load_mapping() and Config.ERP_API_KEY:
-        return erp_api.start_pull(by, dry_run=dry_run)
+        return erp_api.start_pull(by, dry_run=dry_run, mode=mode)
     if not Config.ERP_API_URL:
         raise ApiError(409, 'erp_not_configured', 'ERP_API_URL is not set on the server. Use the CSV import, or configure the connector.')
     try:

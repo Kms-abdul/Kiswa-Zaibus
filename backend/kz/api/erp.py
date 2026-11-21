@@ -23,7 +23,7 @@ def import_file():
 @require('import', 'ctl.int')
 def sync():
     b = body()
-    return jsonify(svc.pull_api(g.user['name'], b.get('since'), dry_run=bool(b.get('dry_run'))))
+    return jsonify(svc.pull_api(g.user['name'], b.get('since'), dry_run=bool(b.get('dry_run')), mode=b.get('mode') or 'auto'))
 
 
 @bp.post('/runs/<int:rid>/stop')

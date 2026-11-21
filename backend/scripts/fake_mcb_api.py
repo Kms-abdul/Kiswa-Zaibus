@@ -18,7 +18,8 @@ VIEW = 'vw_StudentDetails'
 BRANCHES = [('148', 'MS Creative School Mira Road', 'MRR'), ('62', 'MS Creative School Malakpet Girls', 'MPG'), ('211', 'MS Creative Kids Mira Road', 'MKR')]
 ROWS = [{'StudentEnrollmentCode': f'26{BRANCHES[i % 3][2]}{i:04d}', 'FullName': f'Sample Student {i}', 'ClassName': str(i % 10 + 1),
          'Section': 'AB'[i % 2], 'Gender': 'Male' if i % 2 else 'Female', 'FatherPhone': f'98{i:08d}', 'Status': 'Active' if i % 17 else 'Inactive',
-         'BranchID': BRANCHES[i % 3][0], 'BranchName': BRANCHES[i % 3][1], 'AcademicYear': '2026-2027'} for i in range(N)]
+         'BranchID': BRANCHES[i % 3][0], 'BranchName': BRANCHES[i % 3][1], 'AcademicYear': '2026-2027',
+         'LastModifiedDate': f'2026-10-{i % 28 + 1:02d}T10:00:00', 'CreatedDate': f'2026-06-{i % 28 + 1:02d}T09:00:00'} for i in range(N)]
 
 app = Flask(__name__)
 

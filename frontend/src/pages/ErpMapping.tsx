@@ -22,7 +22,7 @@ function toState(saved: any): Record<string, Src> {
   return out;
 }
 
-function toSpec(view: string, fields: Record<string, Src>, filters: { col: string; val: string }[]) {
+function toSpec(view: string, fields: Record<string, Src>, filters: { col: string; val: string }[], track: { changed: string; created: string }) {
   const f: Record<string, any> = {};
   for (const [k, s] of Object.entries(fields)) {
     if (!s.kind) continue;
@@ -31,7 +31,7 @@ function toSpec(view: string, fields: Record<string, Src>, filters: { col: strin
     const m = fromText(s.map); if (Object.keys(m).length) o.map = m;
     f[k] = o;
   }
-  return { view, fields: f, filters: Object.fromEntries(filters.filter(x => x.col && x.val).map(x => [x.col, x.val])) };
+  return { view, fields: f, filters: Object.fromEntries(filters.filter(x => x.col && x.val).map(x => [x.col, x.val])), track };
 }
 
 export default function ErpMapping({ onStarted }: { onStarted: () => void }) {
@@ -45,6 +45,7 @@ export default function ErpMapping({ onStarted }: { onStarted: () => void }) {
   const [cols, setCols] = useState<{ name: string; type: string }[]>([]);
   const [fields, setFields] = useState<Record<string, Src>>({});
   const [filters, setFilters] = useState<{ col: string; val: string }[]>([]);
+  const [track, setTrack] = useState<{ changed: string; created: string }>({ changed: '', created: '' });
   const [prev, setPrev] = useState<any>(null);
   const [run, busy] = useAction();
   const defs: FieldDef[] = saved.data?.fields || [];
@@ -54,6 +55,7 @@ export default function ErpMapping({ onStarted }: { onStarted: () => void }) {
     const m = saved.data?.mapping;
     if (!m) return;
     setView(m.view); setFields(toState(m)); setFilters(Object.entries<string>(m.filters || {}).map(([col, val]) => ({ col, val })));
+    setTrack({ changed: m.track?.changed || '', created: m.track?.created || '' });
   }, [saved.data]);
   useEffect(() => {
     if (!view || !ready) { setCols([]); return; }
@@ -62,16 +64,18 @@ export default function ErpMapping({ onStarted }: { onStarted: () => void }) {
 
   const loadViews = () => run(() => api<string[]>('/erp/api/views').then(v => { setViews(v); return v; }), (v: string[]) => `${v.length} view(s) found.`);
   const set = (k: string, p: Partial<Src>) => setFields(f => ({ ...f, [k]: { ...(f[k] || { kind: '' }), ...p } }));
-  const spec = useMemo(() => toSpec(view, fields, filters), [view, fields, filters]);
+  const spec = useMemo(() => toSpec(view, fields, filters, track), [view, fields, filters, track]);
   const colNames = cols.map(c => c.name);
 
   const preview = () => run(() => api('/erp/api/preview', { body: { mapping: spec } }).then(r => { setPrev(r); return r; }),
     (r: any) => `${r.rows.length} row(s) previewed; ${r.rows.filter((x: any) => x.problem).length} with a problem.`);
   const save = async () => { if (await run(() => api('/erp/api/mapping', { method: 'PUT', body: { mapping: spec } }), () => 'Mapping saved.')) { saved.reload(); st.reload(); } };
-  const pull = async (dry: boolean) => {
-    if (await run(() => api('/erp/sync', { body: { dry_run: dry } }), (x: any) => (x.status === 'Running'
-      ? `${x.run} started${dry ? ' (trial run: nothing is saved)' : ''}. Progress shows in Sync runs below.` : `${x.run}: ${x.created} created, ${x.updated} updated.`))) onStarted();
+  const pull = async (dry: boolean, mode: 'full' | 'changes') => {
+    if (await run(() => api('/erp/sync', { body: { dry_run: dry, mode } }), (x: any) => (x.status === 'Running'
+      ? `${x.run} started (${mode === 'changes' ? 'only changes since the last pull' : 'all rows'})${dry ? ', trial run: nothing is saved' : ''}. Progress shows in Sync runs below.`
+      : `${x.run}: ${x.created} created, ${x.updated} updated.`))) { onStarted(); st.reload(); }
   };
+  const sync = st.data?.sync || {};
 
   if (!st.data) return null;
   return <Panel title="API connection and column mapping" actions={<Btn onClick={() => st.reload()}>Test connection</Btn>}>
@@ -131,6 +135,18 @@ export default function ErpMapping({ onStarted }: { onStarted: () => void }) {
           })}
         </div>
 
+        <h4>4. Change tracking (so a daily pull reads only what is new)</h4>
+        <p className="muted">Choose the date columns the ERP updates. "Pull changes" then reads newest first and stops where the last pull ended
+          (re-reading one extra day to be safe), instead of downloading every student again.</p>
+        <div className="form grid2">
+          <Field label="Date a student was last changed" hint="e.g. LastModifiedDate">
+            <select value={track.changed} disabled={!edit} onChange={e => setTrack(t => ({ ...t, changed: e.target.value }))}>
+              <option value="">— none —</option>{colNames.map(c => <option key={c}>{c}</option>)}</select></Field>
+          <Field label="Date a student was added" hint="e.g. CreatedDate (catches new admissions)">
+            <select value={track.created} disabled={!edit} onChange={e => setTrack(t => ({ ...t, created: e.target.value }))}>
+              <option value="">— none —</option>{colNames.map(c => <option key={c}>{c}</option>)}</select></Field>
+        </div>
+
         <div className="row">
           <Btn busy={busy} onClick={preview}>Preview 20 rows</Btn>
           {edit && <Btn kind="pri" busy={busy} onClick={save}>Save mapping</Btn>}
@@ -141,10 +157,17 @@ export default function ErpMapping({ onStarted }: { onStarted: () => void }) {
             { key: 'problem', label: 'Problem', render: (r: any) => (r.problem ? <Pill s={r.problem} tone="bad" /> : <Pill s="OK" tone="ok" />) }]} />}
 
         {edit && st.data.mapping_saved && <>
-          <h4>4. Pull the students</h4>
-          <p className="muted">A trial run checks every row and shows what would be created or updated, without saving. The real pull adds new
-            students and updates changed ones; pulling again never duplicates.</p>
-          <div className="row"><Btn busy={busy} onClick={() => pull(true)}>Trial run</Btn><Btn kind="pri" busy={busy} onClick={() => pull(false)}>Pull now</Btn></div>
+          <h4>5. Pull the students</h4>
+          <p className="muted"><b>Pull changes</b> (daily): only students added or changed since the last pull, a minute or two.
+            <b> Full pull</b>: every student again (the first time, after changing the mapping, or now and then as a check-up); it also retries rows that failed.
+            A trial run checks without saving. Pulling never duplicates.</p>
+          <p className="muted">{sync.full_at ? <>Last full pull: {sync.full_at.replace('T', ' ')} · last pull: {(sync.last_at || '').replace('T', ' ')}</>
+            : sync.tracking ? 'No full pull yet with this mapping: run a full pull first.' : 'Choose the change-tracking columns above to enable Pull changes.'}</p>
+          <div className="row">
+            <Btn kind="pri" busy={busy} disabled={!sync.changes_ready} onClick={() => pull(false, 'changes')}>Pull changes</Btn>
+            <Btn busy={busy} onClick={() => pull(false, 'full')}>Full pull</Btn>
+            <Btn busy={busy} onClick={() => pull(true, sync.changes_ready ? 'changes' : 'full')}>Trial run</Btn>
+          </div>
         </>}
       </>}
     </>}

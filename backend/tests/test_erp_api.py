@@ -1,5 +1,6 @@
 """MCB Read-Only API connector: column mapping chosen on screen, paging, background pull, no duplicates, key never exposed.
 The API is faked in-process with the same contract (/views, /views/{v}/schema, /views/{v}?skip&limit&sort_by&<col>=, x-api-key)."""
+import datetime as dt
 import time
 
 import pytest
@@ -9,13 +10,16 @@ from conftest import as_user, ok, sql
 SUPER, CASHIER = 'KZ-IT-001', 'KZ-MSA-021'
 KEY = 'test-key-not-real-123'
 VIEW = 'vw_StudentList'
-COLUMNS = ['EnrollmentCode', 'StudentName', 'ClassName', 'SectionName', 'Gender', 'FatherMobile', 'StudentStatus', 'BranchName', 'AcademicYear']
+COLUMNS = ['EnrollmentCode', 'StudentName', 'ClassName', 'SectionName', 'Gender', 'FatherMobile', 'StudentStatus', 'BranchName', 'AcademicYear',
+           'LastModified', 'Created']
+T0 = dt.datetime(2026, 1, 1, 8, 0)
 
 
 def make_rows(n=1200):
     rows = [{'EnrollmentCode': f'26TST{i:04d}', 'StudentName': f'Test Student {i}', 'ClassName': str(i % 10 + 1), 'SectionName': 'AB'[i % 2],
              'Gender': 'Male' if i % 2 else 'Female', 'FatherMobile': f'98{i:08d}', 'StudentStatus': 'Studying', 'BranchName': 'Test Branch',
-             'AcademicYear': '2026-2027'} for i in range(n)]
+             'AcademicYear': '2026-2027', 'LastModified': (T0 + dt.timedelta(hours=i)).isoformat(), 'Created': (T0 + dt.timedelta(hours=i)).isoformat()}
+            for i in range(n)]
     if n > 7:
         rows[7]['FatherMobile'] = '12345'                               # one invalid row
     return rows
@@ -48,10 +52,10 @@ class FakeMCB:
             p = dict(params or {})
             skip, limit = int(p.pop('skip', 0)), int(p.pop('limit', 50))
             assert limit <= 500, 'the API caps limit at 500'
-            sort_by = p.pop('sort_by', None)
+            sort_by, sort_dir = p.pop('sort_by', None), p.pop('sort_dir', 'asc')
             data = [r for r in self.rows if all(str(r.get(k)) == v for k, v in p.items())]
             if sort_by:
-                data = sorted(data, key=lambda r: r[sort_by])
+                data = sorted(data, key=lambda r: r[sort_by], reverse=sort_dir == 'desc')
             return FakeResponse(200, data[skip:skip + limit])
         return FakeResponse(404, {'detail': 'not found'})
 
@@ -192,3 +196,34 @@ def test_retry_long_values_and_stop(app, fake, monkeypatch):
     assert r['status'] == 'Stopped'
     assert s.post(f'/api/erp/runs/{rid}/stop', json={}).get_json()['error'] == 'not_running'
     wait_run(ok(s.post('/api/erp/sync', json={'dry_run': True}))['run'])
+
+
+def test_pull_changes_reads_only_new_and_changed(app, fake):
+    s = as_user(app, SUPER)
+    tracked = dict(MAPPING, track={'changed': 'LastModified', 'created': 'Created'})
+    ok(s.put('/api/erp/api/mapping', json={'mapping': tracked}))
+    assert s.post('/api/erp/sync', json={'mode': 'changes'}).get_json()['error'] == 'full_pull_needed'   # no full pull yet with this mapping
+    full = ok(s.post('/api/erp/sync', json={}))                         # auto -> full the first time
+    assert full['mode'] == 'full'
+    wait_run(full['run'])
+    sync = ok(s.get('/api/erp/api/status'))['sync']
+    assert sync['changes_ready'] and sync['full_at'] and sync['since']['created'] == (T0 + dt.timedelta(hours=1199)).isoformat()
+
+    now = dt.datetime(2026, 11, 21, 18, 0).isoformat()                  # this evening: two admissions and one change
+    for j in (1, 2):
+        fake.rows.append({**fake.rows[0], 'EnrollmentCode': f'26NEW{j:04d}', 'StudentName': f'New Student {j}', 'FatherMobile': f'97{j:08d}',
+                          'Created': now, 'LastModified': now})
+    fake.rows[1190] = {**fake.rows[1190], 'StudentStatus': 'Left', 'LastModified': now}
+    before = len(fake.calls)
+    ch = ok(s.post('/api/erp/sync', json={}))                           # auto -> changes now
+    assert ch['mode'] == 'changes'
+    st = wait_run(ch['run'])
+    assert (st['created'], st['updated'], st['failed']) == (2, 1, 0)
+    pages = [p for path, p in fake.calls[before:] if path == f'/views/{VIEW}']
+    assert len(pages) == 2 and all(p['sort_dir'] == 'desc' for p in pages)   # one page per date column, not the whole view
+    assert sql("SELECT COUNT(*) n FROM students WHERE adm_no IN ('26NEW0001', '26NEW0002')")[0]['n'] == 2
+    assert sql("SELECT status FROM students WHERE adm_no='26TST1190'")[0]['status'] == 'Left'
+    assert sql("SELECT trigger_type FROM erp_sync_runs WHERE no=%s", ch['run'])[0]['trigger_type'] == 'api changes'
+
+    nothing = wait_run(ok(s.post('/api/erp/sync', json={}))['run'])     # nothing new: only the one-day overlap is re-read
+    assert (nothing['created'], nothing['updated']) == (0, 0)

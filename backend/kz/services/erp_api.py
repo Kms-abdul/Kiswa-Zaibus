@@ -15,6 +15,9 @@ The mapping (settings 'erp_map') says which view feeds the student import and, p
 Rows are mapped to the importer's columns and go through erp.upsert_students (validation, dedupe by erp_ref / adm_no, run log).
 A full pull runs in a background thread: it can be tens of thousands of rows.
 """
+import datetime as dt
+import hashlib
+import json
 import re
 import threading
 import time
@@ -107,6 +110,10 @@ def status():
     out = {'configured': bool(Config.ERP_API_URL), 'key_set': bool(Config.ERP_API_KEY), 'header': Config.ERP_API_KEY_HEADER,
            'host': urlparse(Config.ERP_API_URL).netloc if Config.ERP_API_URL else None, 'reachable': None, 'database': None,
            'mapping_saved': bool(load_mapping())}
+    spec = load_mapping()
+    st = load_state(spec) if spec else None
+    out['sync'] = {'tracking': bool(spec and spec.get('track')), 'changes_ready': bool(spec and spec.get('track') and st and st.get('max')),
+                   'full_at': (st or {}).get('full_at'), 'last_at': (st or {}).get('last_at'), 'since': (st or {}).get('max')}
     if out['configured']:
         try:
             j = _get('/health/db', auth=False)
@@ -154,15 +161,7 @@ def fetch_rows(view, filters=None, page_size=PAGE, max_rows=None, sort_by=None, 
         params = {'skip': skip, 'limit': limit, **(filters or {})}
         if sort_by:
             params['sort_by'] = sort_by
-        for attempt, wait in enumerate((0,) + RETRIES):
-            if wait:
-                time.sleep(wait)
-            try:
-                rows = [r for r in _list(_get(f'/views/{quote(view)}', params)) if isinstance(r, dict)]
-                break
-            except ApiError as e:                        # a busy or restarting server: wait and try the same page again
-                if e.code not in ('erp_unreachable', 'erp_error') or attempt == len(RETRIES):
-                    raise
+        rows = _page(view, params)
         yield from rows
         got += len(rows)
         if len(rows) < limit:
@@ -171,6 +170,88 @@ def fetch_rows(view, filters=None, page_size=PAGE, max_rows=None, sort_by=None, 
         if PAUSE:
             time.sleep(PAUSE)
     raise ApiError(502, 'erp_too_many_pages', 'The ERP view returned more pages than expected; stopped for safety.')
+
+
+def _page(view, params):
+    """One page, retried when the server is busy, refusing or restarting."""
+    for attempt, wait in enumerate((0,) + RETRIES):
+        if wait:
+            time.sleep(wait)
+        try:
+            return [r for r in _list(_get(f'/views/{quote(view)}', params)) if isinstance(r, dict)]
+        except ApiError as e:
+            if e.code not in ('erp_unreachable', 'erp_error') or attempt == len(RETRIES):
+                raise
+    return []
+
+
+# ---------------------------------------------------------------- incremental pulls ("Pull changes")
+OVERLAP = dt.timedelta(days=1)     # re-read one day before the last sync point; rows already up to date are simply skipped
+
+
+def _ts(v):
+    """The API's dates are ISO text (2026-11-21T15:08:41.837000); anything else counts as unknown."""
+    if v in (None, ''):
+        return None
+    try:
+        return dt.datetime.fromisoformat(str(v).replace('Z', '+00:00')[:26]).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+def fetch_changes(spec, state, stop=None):
+    """Rows created or changed since the last pull: for each tracked date column, read newest first and stop at the first row
+    older than (last sync point - OVERLAP). Yields raw rows; a row may come twice (changed and created), the caller de-duplicates."""
+    view, filters = spec['view'], spec.get('filters') or {}
+    for kind, col in (spec.get('track') or {}).items():
+        last = _ts((state.get('max') or {}).get(kind))
+        if not col or not last:
+            continue
+        cutoff = last - OVERLAP
+        skip = 0
+        for _ in range(MAX_PAGES):
+            if stop and stop():
+                raise Stopped()
+            rows = _page(view, {'skip': skip, 'limit': PAGE, 'sort_by': col, 'sort_dir': 'desc', **filters})
+            older = False
+            for r in rows:
+                t = _ts(r.get(col))
+                if t is None or t < cutoff:          # sorted newest first: the rest is older than the sync point
+                    older = True
+                    break
+                yield r
+            if older or len(rows) < PAGE:
+                break
+            skip += len(rows)
+            if PAUSE:
+                time.sleep(PAUSE)
+
+
+def _signature(spec):
+    return hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()
+
+
+def load_state(spec=None):
+    """Where the last successful pull got to. Ignored (a full pull is needed) when the mapping changed since."""
+    s = setting('erp_sync_state')
+    if not isinstance(s, dict):
+        return None
+    if spec is not None and s.get('sig') != _signature(spec):
+        return None
+    return s
+
+
+def _save_state(spec, maxima, full, old):
+    st = {'sig': _signature(spec), 'max': {}, 'full_at': (old or {}).get('full_at'), 'last_at': dt.datetime.now().isoformat(timespec='seconds')}
+    for kind in (spec.get('track') or {}):
+        vals = [v for v in (maxima.get(kind), ((old or {}).get('max') or {}).get(kind)) if _ts(v)]
+        if vals:
+            st['max'][kind] = max(vals, key=_ts)
+    if full:
+        st['full_at'] = st['last_at']
+    db.run('''INSERT INTO settings (skey, svalue, updated_at) VALUES ('erp_sync_state', :v, NOW(6))
+              ON DUPLICATE KEY UPDATE svalue=:v, updated_at=NOW(6)''', v=st)
+    return st
 
 
 # ---------------------------------------------------------------- mapping
@@ -232,7 +313,17 @@ def validate_mapping(spec, columns):
             raise bad(f'Filter: the view has no column {col}.', 'unknown_column')
         if str(val).strip():
             filters[col] = str(val).strip()[:120]
-    return {'view': view, 'filters': filters, 'fields': fields}
+    track, tin = {}, spec.get('track') if isinstance(spec.get('track'), dict) else {}
+    for kind in ('changed', 'created'):                 # date columns that let "Pull changes" read only what is new
+        col = str(tin.get(kind) or '').strip()
+        if col:
+            if col not in names:
+                raise bad(f'Change tracking: the view has no column {col}.', 'unknown_column')
+            track[kind] = col
+    out = {'view': view, 'filters': filters, 'fields': fields}
+    if track:
+        out['track'] = track
+    return out
 
 
 def _value(row, lower, src):
@@ -287,21 +378,32 @@ def save_mapping(spec, user):
 
 
 # ---------------------------------------------------------------- the pull (background)
-def start_pull(by, dry_run=False):
+def start_pull(by, dry_run=False, mode='auto'):
+    """mode: 'full' (every row), 'changes' (only rows created / changed since the last pull), 'auto' (changes when possible)."""
     spec = load_mapping()
     if not spec:
         raise conflict('Save the column mapping first (Settings → ERP import → API connection).', 'no_mapping')
     if not configured():
         raise ApiError(409, 'erp_key_missing', 'ERP_API_URL and ERP_API_KEY must be set in backend/.env.')
+    state = load_state(spec)
+    can_changes = bool(spec.get('track')) and bool(state and state.get('max'))
+    if mode == 'auto':
+        mode = 'changes' if can_changes else 'full'
+    if mode == 'changes' and not can_changes:
+        raise conflict('Pull changes needs the change-tracking date columns and one completed full pull with this mapping. Run a full pull first.',
+                       'full_pull_needed')
+    if mode not in ('full', 'changes'):
+        raise bad('Unknown pull mode.', 'bad_mode')
     db.run("UPDATE erp_sync_runs SET status='Failed', finished_at=NOW(6) WHERE status='Running' AND started_at < NOW(6) - INTERVAL 2 HOUR")
     if db.val("SELECT COUNT(*) FROM erp_sync_runs WHERE status='Running'"):
         raise conflict('An ERP pull is already running. Wait for it to finish.', 'erp_running')
     run_no = next_no('HO', 'ERP')
-    run_id = db.insert('erp_sync_runs', dict(no=run_no, triggered_by=by, trigger_type='api', feeds='students', dry_run=1 if dry_run else 0, status='Running'))
+    run_id = db.insert('erp_sync_runs', dict(no=run_no, triggered_by=by, trigger_type='api changes' if mode == 'changes' else 'api full', feeds='students',
+                                             dry_run=1 if dry_run else 0, status='Running'))
     db.session().commit()                                # visible to the screen while the thread works
     app = current_app._get_current_object()
-    threading.Thread(target=_job, args=(app, run_id, by, spec, dry_run), daemon=True, name=f'erp-pull-{run_no}').start()
-    return {'run': run_no, 'status': 'Running', 'dry_run': dry_run}
+    threading.Thread(target=_job, args=(app, run_id, by, spec, dry_run, mode, state), daemon=True, name=f'erp-pull-{run_no}').start()
+    return {'run': run_no, 'status': 'Running', 'dry_run': dry_run, 'mode': mode}
 
 
 def stop_run(run_id, user):
@@ -340,19 +442,34 @@ def _progress(run_id, text_):
         pass
 
 
-def _job(app, run_id, by, spec, dry_run):
+def _job(app, run_id, by, spec, dry_run, mode='full', state=None):
     stop = lambda: _stopped(run_id)                             # noqa: E731
+    track = spec.get('track') or {}
     with app.app_context():
         g.response_ok = True
         try:
-            rows = []
-            for raw in fetch_rows(spec['view'], spec.get('filters'), sort_by=_sort_column(spec), stop=stop):
-                rows.append(apply_mapping(raw, spec))
+            rows, seen, maxima = [], set(), {}
+            source = fetch_changes(spec, state or {}, stop=stop) if mode == 'changes' else \
+                fetch_rows(spec['view'], spec.get('filters'), sort_by=_sort_column(spec), stop=stop)
+            for raw in source:
+                for kind, col in track.items():          # remember the newest date seen: next time start from there
+                    v = raw.get(col)
+                    if _ts(v) and (kind not in maxima or _ts(v) > _ts(maxima[kind])):
+                        maxima[kind] = v
+                m = apply_mapping(raw, spec)
+                key = m.get('adm_no') or id(raw)
+                if key in seen:                          # "changes" reads by two dates: the same student may come twice
+                    continue
+                seen.add(key)
+                rows.append(m)
                 if len(rows) % PAGE == 0:
                     _progress(run_id, f'students · downloading: {len(rows):,} rows so far')
             _progress(run_id, f'students · downloaded {len(rows):,} rows; saving')
             erp.upsert_students(rows, trigger='api', by=by, dry_run=dry_run, run_id=run_id, commit_every=500, stop=stop)
-            _progress(run_id, f'students · {len(rows):,} rows')
+            if not dry_run and track:
+                _save_state(spec, maxima, full=(mode == 'full'), old=state)
+            what = 'changes since the last pull' if mode == 'changes' else 'all rows'
+            _progress(run_id, f'students · {what}: {len(rows):,} rows')
             db.finish(True)
         except Stopped:
             db.finish(False)                                    # the run is already marked Stopped; rows committed so far stay
