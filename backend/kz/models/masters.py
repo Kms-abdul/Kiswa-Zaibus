@@ -118,7 +118,7 @@ class Student(Base):
     name: Mapped[str] = mapped_column(String(120))
     gender: Mapped[Optional[str]] = mapped_column(String(1))
     class_name: Mapped[str] = mapped_column(String(20))
-    section: Mapped[Optional[str]] = mapped_column(String(5))
+    section: Mapped[Optional[str]] = mapped_column(String(30))
     parent_mobile: Mapped[Optional[str]] = mapped_column(String(20), index=True)
     parent_email: Mapped[Optional[str]] = mapped_column(String(120))
     category: Mapped[str] = mapped_column(String(40), server_default='Regular')   # Regular, MSEA Sponsored, ...

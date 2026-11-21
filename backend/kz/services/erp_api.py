@@ -22,6 +22,7 @@ from urllib.parse import quote, urlparse
 
 import requests
 from flask import current_app, g
+from sqlalchemy import text
 
 from .. import db
 from ..config import Config
@@ -317,13 +318,40 @@ def stop_run(run_id, user):
     return {'run': r['no'], 'status': 'Stopped'}
 
 
+def _stopped(run_id):
+    """Asked to stop? In this process (_STOP) or by another server worker (the run row is no longer Running). A fresh connection
+    reads the latest committed status (the job's own transaction would keep seeing its old snapshot)."""
+    if run_id in _STOP:
+        return True
+    try:
+        with db.engine().connect() as c:
+            return c.execute(text('SELECT status FROM erp_sync_runs WHERE id=:i'), {'i': run_id}).scalar() != 'Running'
+    except Exception:                                    # noqa: BLE001 (a failed check never stops the pull)
+        return False
+
+
+def _progress(run_id, text_):
+    """Show where a background pull is (in erp_sync_runs.feeds), on its own short connection so the screen sees it at once."""
+    try:
+        with db.engine().begin() as c:
+            c.execute(text('UPDATE erp_sync_runs SET feeds=:f WHERE id=:i'), {'f': text_[:200], 'i': run_id})
+    except Exception:                                    # noqa: BLE001 (progress text is best-effort)
+        pass
+
+
 def _job(app, run_id, by, spec, dry_run):
-    stop = lambda: run_id in _STOP                              # noqa: E731
+    stop = lambda: _stopped(run_id)                             # noqa: E731
     with app.app_context():
         g.response_ok = True
         try:
-            rows = [apply_mapping(r, spec) for r in fetch_rows(spec['view'], spec.get('filters'), sort_by=_sort_column(spec), stop=stop)]
+            rows = []
+            for raw in fetch_rows(spec['view'], spec.get('filters'), sort_by=_sort_column(spec), stop=stop):
+                rows.append(apply_mapping(raw, spec))
+                if len(rows) % PAGE == 0:
+                    _progress(run_id, f'students · downloading: {len(rows):,} rows so far')
+            _progress(run_id, f'students · downloaded {len(rows):,} rows; saving')
             erp.upsert_students(rows, trigger='api', by=by, dry_run=dry_run, run_id=run_id, commit_every=500, stop=stop)
+            _progress(run_id, f'students · {len(rows):,} rows')
             db.finish(True)
         except Stopped:
             db.finish(False)                                    # the run is already marked Stopped; rows committed so far stay

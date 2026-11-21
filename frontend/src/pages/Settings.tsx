@@ -112,7 +112,9 @@ function Erp() {
         <Btn kind="pri" busy={busy} onClick={upload}>Upload</Btn></div>
     </Panel>}
     <Panel title="Sync runs"><DataTable rows={runs.data} onRow={setSel} cols={[{ key: 'no', label: 'Run', primary: true }, { key: 'started_at', label: 'Started', render: r => when(r.started_at) },
-      { key: 'trigger_type', label: 'How', render: r => r.trigger_type + (r.dry_run ? ' · trial' : '') }, { key: 'created', label: 'New', align: 'r' },
+      { key: 'trigger_type', label: 'How', render: r => <>{r.trigger_type + (r.dry_run ? ' · trial' : '')}
+        {r.feeds && r.feeds !== 'students' && <small className="muted" style={{ display: 'block' }}>{r.feeds.replace(/^students · /, '')}</small>}</> },
+      { key: 'created', label: 'New', align: 'r' },
       { key: 'updated', label: 'Updated', align: 'r' }, { key: 'skipped', label: 'Unchanged', align: 'r' }, { key: 'failed', label: 'Failed', align: 'r' },
       { key: 'status', label: 'Status', render: r => <><Pill s={r.status} tone={r.status === 'Running' ? 'info' : r.status === 'Failed' ? 'bad' : r.status === 'Stopped' || r.failed ? 'warn' : 'ok'} />
         {r.status === 'Running' && can('import', 'ctl.int') && <Btn kind="link" busy={busy} onClick={async (e: any) => { e.stopPropagation();

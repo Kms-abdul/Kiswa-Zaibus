@@ -176,11 +176,11 @@ def test_retry_long_values_and_stop(app, fake, monkeypatch):
     with app.app_context():
         assert len(list(erp_api.fetch_rows(VIEW, sort_by='EnrollmentCode'))) == 1200 and state['n'] == 1
     # a value longer than its column fails that row only, the rest is imported
-    fake.rows[3]['SectionName'] = 'New Admission'
+    fake.rows[3]['SectionName'] = 'A section name that is far too long'
     ok(s.put('/api/erp/api/mapping', json={'mapping': MAPPING}))
     st = wait_run(ok(s.post('/api/erp/sync', json={'dry_run': True}))['run'])
     assert st['status'] == 'Completed with errors' and st['failed'] == 2
-    assert sql("SELECT COUNT(*) n FROM erp_sync_records WHERE error LIKE 'section is longer than 5 characters%%'")[0]['n'] >= 1
+    assert sql("SELECT COUNT(*) n FROM erp_sync_records WHERE error LIKE 'section is longer than 30 characters%%'")[0]['n'] >= 1
     # Stop: a running pull is marked Stopped, and a stale "Running" row no longer blocks the next pull
     rid = sql("SELECT id FROM erp_sync_runs ORDER BY id DESC LIMIT 1")[0]['id']
     sql("UPDATE erp_sync_runs SET status='Running' WHERE id=%s", rid)

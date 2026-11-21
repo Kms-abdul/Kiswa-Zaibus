@@ -10,7 +10,7 @@ def test_seed_loaded_and_books_balance(app):
 
 def test_health(client):
     j = ok(client.get('/api/health'))
-    assert j['migration'] == '0007'
+    assert j['migration'] == '0008'
 
 
 def test_director_org(app):

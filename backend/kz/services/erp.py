@@ -26,7 +26,7 @@ ALIASES = {'admission_no': 'adm_no', 'adm': 'adm_no', 'erp': 'erp_ref', 'erp_id'
            'mobile': 'parent_mobile', 'email': 'parent_email', 'school': 'school_id', 'ay': 'academic_year', 'g': 'gender', 'sec': 'section', 'cat': 'category'}
 STATUSES = {'Active', 'Inactive', 'Transferred', 'Left', 'Cancelled'}
 # column sizes of the students table (models/masters.py Student)
-MAX_LEN = {'erp_ref': 30, 'name': 120, 'class_name': 20, 'section': 5, 'parent_email': 120, 'category': 40, 'school_id': 10, 'campus': 30,
+MAX_LEN = {'erp_ref': 30, 'name': 120, 'class_name': 20, 'section': 30, 'parent_email': 120, 'category': 40, 'school_id': 10, 'campus': 30,
            'academic_year': 10}
 
 
@@ -119,8 +119,12 @@ def upsert_students(rows, *, trigger, by, dry_run=False, run_id=None, commit_eve
         counts[action] += 1
         db.insert('erp_sync_records', dict(run_id=run_id, feed='students', direction='in', source_ref=r['erp_ref'], action=action, status='Done' if not dry_run else 'Dry run',
                                            snapshot=r))
+    if stop and stop():                               # stopped while the last rows were processed: keep "Stopped"
+        from .erp_api import Stopped
+        raise Stopped()
     status = 'Completed' if not counts['failed'] else 'Completed with errors'
-    db.run('''UPDATE erp_sync_runs SET finished_at=NOW(6), created=:c, updated=:u, skipped=:s, failed=:f, status=:st WHERE id=:i''',
+    db.run('''UPDATE erp_sync_runs SET finished_at=NOW(6), created=:c, updated=:u, skipped=:s, failed=:f, status=:st
+              WHERE id=:i AND status='Running' ''',
            c=counts['created'], u=counts['updated'], s=counts['skipped'], f=counts['failed'], st=status, i=run_id)
     audit.write('ERP sync', run_no, new=counts, category='integration', user={'id': None, 'name': by, 'main_role': 'System'})
     if counts['failed']:
