@@ -227,3 +227,18 @@ def test_pull_changes_reads_only_new_and_changed(app, fake):
 
     nothing = wait_run(ok(s.post('/api/erp/sync', json={}))['run'])     # nothing new: only the one-day overlap is re-read
     assert (nothing['created'], nothing['updated']) == (0, 0)
+
+
+def test_filter_with_several_values_reads_each(app, fake):
+    """Next year's admissions (e.g. 27CMK0001 in 2027-2028) need kits this year: a filter may list several academic years."""
+    from kz.services import erp_api
+    fake.rows += [{**fake.rows[0], 'EnrollmentCode': f'27TST{i:04d}', 'AcademicYear': '2027-2028'} for i in range(3)]
+    fake.rows += [{**fake.rows[0], 'EnrollmentCode': '23TST0001', 'AcademicYear': '2023-2024'}]
+    clean = erp_api.validate_mapping({**MAPPING, 'filters': {'AcademicYear': ' 2026-2027 ,2027-2028, '}}, [{'name': c} for c in COLUMNS])
+    assert clean['filters'] == {'AcademicYear': '2026-2027, 2027-2028'}
+    with app.app_context():
+        rows = list(erp_api.fetch_rows(VIEW, clean['filters'], sort_by='EnrollmentCode'))
+        assert len(rows) == 1203 and {r['AcademicYear'] for r in rows} == {'2026-2027', '2027-2028'}
+        assert len(list(erp_api.fetch_rows(VIEW, clean['filters'], page_size=5, max_rows=7))) == 7
+    years = [p['AcademicYear'] for path, p in fake.calls if path == f'/views/{VIEW}']
+    assert years[:4] == ['2026-2027'] * 3 + ['2027-2028']              # one value per request, in the order written

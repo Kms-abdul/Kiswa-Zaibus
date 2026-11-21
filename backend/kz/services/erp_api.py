@@ -148,7 +148,28 @@ def view_schema(view):
     return cols
 
 
+def _filter_sets(filters):
+    """A filter value may list several values ("2026-2027, 2027-2028"); the API only matches one value, so ask once per combination,
+    in the order written."""
+    sets = [{}]
+    for col, val in (filters or {}).items():
+        vals = [v.strip() for v in str(val).split(',') if v.strip()] or ['']
+        sets = [{**s, col: v} for s in sets for v in vals]
+    return sets
+
+
 def fetch_rows(view, filters=None, page_size=PAGE, max_rows=None, sort_by=None, stop=None):
+    """All rows of a view; with several filter values, each set in turn (max_rows counts across all of them)."""
+    got = 0
+    for f in _filter_sets(filters):
+        for r in _fetch_rows(view, f, page_size, (max_rows - got) if max_rows else None, sort_by, stop):
+            got += 1
+            yield r
+        if max_rows and got >= max_rows:
+            return
+
+
+def _fetch_rows(view, filters=None, page_size=PAGE, max_rows=None, sort_by=None, stop=None):
     """All rows of a view, page by page (skip / limit) until a short page. `stop`: callable, True = abandon (raises Stopped)."""
     _check_view(view)
     skip = got = 0
@@ -202,8 +223,8 @@ def _ts(v):
 def fetch_changes(spec, state, stop=None):
     """Rows created or changed since the last pull: for each tracked date column, read newest first and stop at the first row
     older than (last sync point - OVERLAP). Yields raw rows; a row may come twice (changed and created), the caller de-duplicates."""
-    view, filters = spec['view'], spec.get('filters') or {}
-    for kind, col in (spec.get('track') or {}).items():
+    view = spec['view']
+    for filters, (kind, col) in ((f, t) for f in _filter_sets(spec.get('filters')) for t in (spec.get('track') or {}).items()):
         last = _ts((state.get('max') or {}).get(kind))
         if not col or not last:
             continue
@@ -311,8 +332,11 @@ def validate_mapping(spec, columns):
     for col, val in (spec.get('filters') or {}).items():
         if col not in names:
             raise bad(f'Filter: the view has no column {col}.', 'unknown_column')
-        if str(val).strip():
-            filters[col] = str(val).strip()[:120]
+        vals = [v.strip() for v in str(val).split(',') if v.strip()]
+        if len(vals) > 10:
+            raise bad(f'Filter {col}: at most 10 values.', 'bad_mapping')
+        if vals:
+            filters[col] = ', '.join(vals)[:250]
     track, tin = {}, spec.get('track') if isinstance(spec.get('track'), dict) else {}
     for kind in ('changed', 'created'):                 # date columns that let "Pull changes" read only what is new
         col = str(tin.get(kind) or '').strip()

@@ -106,9 +106,9 @@ export default function ErpMapping({ onStarted }: { onStarted: () => void }) {
         {filters.map((x, i) => <div key={i} className="row">
           <select value={x.col} onChange={e => setFilters(fs => fs.map((y, j) => (j === i ? { ...y, col: e.target.value } : y)))} aria-label="Filter column">
             <option value="">Column…</option>{colNames.map(c => <option key={c}>{c}</option>)}</select>
-          <input placeholder="equals…" value={x.val} onChange={e => setFilters(fs => fs.map((y, j) => (j === i ? { ...y, val: e.target.value } : y)))} aria-label="Filter value" />
+          <input placeholder="equals… (several: 2026-2027, 2027-2028)" value={x.val} onChange={e => setFilters(fs => fs.map((y, j) => (j === i ? { ...y, val: e.target.value } : y)))} aria-label="Filter value" />
           <Btn kind="link" onClick={() => setFilters(fs => fs.filter((_, j) => j !== i))}>Remove</Btn></div>)}
-        {edit && <Btn kind="link" onClick={() => setFilters(fs => [...fs, { col: '', val: '' }])}>+ Add a filter (e.g. academic year = 2026-2027)</Btn>}
+        {edit && <Btn kind="link" onClick={() => setFilters(fs => [...fs, { col: '', val: '' }])}>+ Add a filter (e.g. academic year = 2026-2027, 2027-2028)</Btn>}
 
         <h4>3. Where each field comes from</h4>
         <div className="erp-map">
