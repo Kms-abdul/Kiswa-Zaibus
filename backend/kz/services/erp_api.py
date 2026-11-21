@@ -47,7 +47,8 @@ VIEW_RE = re.compile(r'^[A-Za-z0-9_.$]{1,128}$')
 LABELS = {'adm_no': 'Admission / enrollment number', 'erp_ref': 'ERP reference (unique, never changes)', 'name': 'Student name',
           'gender': 'Gender', 'class_name': 'Class', 'section': 'Section', 'parent_mobile': 'Parent mobile', 'parent_email': 'Parent e-mail',
           'category': 'Category (Regular, MSEA Sponsored …)', 'status': 'Status (Active, Inactive, Transferred, Left, Cancelled)',
-          'school_id': 'School code', 'campus': 'Campus / branch code', 'academic_year': 'Academic year'}
+          'school_id': 'School code (matches Setup → Schools, e.g. MSEA)', 'campus': 'Campus / branch code', 'location': 'Location (city / state)',
+          'academic_year': 'Academic year'}
 
 
 # ---------------------------------------------------------------- HTTP

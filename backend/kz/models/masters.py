@@ -66,7 +66,7 @@ class Item(Base):
     size: Mapped[Optional[str]] = mapped_column(String(20))
     colour: Mapped[Optional[str]] = mapped_column(String(30))
     gender: Mapped[Optional[str]] = mapped_column(String(10))
-    class_name: Mapped[Optional[str]] = mapped_column(String(20))
+    class_name: Mapped[Optional[str]] = mapped_column(String(60))
     term: Mapped[Optional[str]] = mapped_column(String(20))
     academic_year: Mapped[Optional[str]] = mapped_column(String(10))
     school_id: Mapped[Optional[str]] = mapped_column(String(10))
@@ -94,7 +94,7 @@ class Package(Base):
     company: Mapped[str] = mapped_column(String(4))
     name: Mapped[str] = mapped_column(String(160))
     school_id: Mapped[Optional[str]] = mapped_column(String(10))
-    class_name: Mapped[Optional[str]] = mapped_column(String(20))
+    class_name: Mapped[Optional[str]] = mapped_column(String(60))
     gender: Mapped[Optional[str]] = mapped_column(String(10))
     disc_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), server_default='0')
     active: Mapped[bool] = mapped_column(server_default=text('1'))
@@ -117,7 +117,7 @@ class Student(Base):
     erp_ref: Mapped[str] = mapped_column(String(30), unique=True)
     name: Mapped[str] = mapped_column(String(120))
     gender: Mapped[Optional[str]] = mapped_column(String(1))
-    class_name: Mapped[str] = mapped_column(String(20))
+    class_name: Mapped[str] = mapped_column(String(60))
     section: Mapped[Optional[str]] = mapped_column(String(30))
     parent_mobile: Mapped[Optional[str]] = mapped_column(String(20), index=True)
     parent_email: Mapped[Optional[str]] = mapped_column(String(120))
@@ -125,6 +125,7 @@ class Student(Base):
     status: Mapped[str] = mapped_column(String(20), server_default='Active')      # Active, Transferred, Left
     school_id: Mapped[Optional[str]] = mapped_column(String(10))
     campus: Mapped[Optional[str]] = mapped_column(String(30))
+    location: Mapped[Optional[str]] = mapped_column(String(60))       # city / state, e.g. Hyderabad, Maharashtra
     academic_year: Mapped[Optional[str]] = mapped_column(String(10))
     synced_at: Mapped[Optional[dt.datetime]]
 

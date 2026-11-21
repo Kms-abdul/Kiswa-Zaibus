@@ -291,7 +291,7 @@ function Students({ edit }: { edit: boolean }) {
     <StudentSearch onPick={setSt} />
     {st && <Modal title={`${st.name} · ${st.adm_no}`} onClose={() => setSt(null)} footer={<><Btn onClick={() => setSt(null)}>Close</Btn>
       {edit && <Btn kind="pri" busy={busy} onClick={async () => { if (await run(() => saveCustom('student', st.adm_no), () => 'Saved.')) setSt(null); }}>Save details</Btn>}</>}>
-      <Kv items={[['Class', `${st.class_name}${st.section ? '-' + st.section : ''}`], ['Category', st.category], ['Status', st.status], ['School', st.school_id], ['Parent mobile', st.parent_mobile]]} />
+      <Kv items={[['Class', `${st.class_name}${st.section ? '-' + st.section : ''}`], ['Category', st.category], ['Status', st.status], ['School', st.school_id], ['Campus', st.campus], ['Location', st.location], ['Parent mobile', st.parent_mobile]]} />
       <CustomBlock entity="student" refId={st.adm_no} />
     </Modal>}
   </Panel>;

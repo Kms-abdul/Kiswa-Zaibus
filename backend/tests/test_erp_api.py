@@ -60,7 +60,8 @@ MAPPING = {'view': VIEW, 'filters': {'AcademicYear': '2026-2027'}, 'fields': {
     'adm_no': {'col': 'EnrollmentCode'}, 'erp_ref': {'same_as': 'adm_no'}, 'name': {'col': 'StudentName'},
     'class_name': {'col': 'ClassName'}, 'section': {'col': 'SectionName'}, 'gender': {'col': 'Gender'},
     'parent_mobile': {'col': 'FatherMobile'}, 'status': {'col': 'StudentStatus', 'map': {'Studying': 'Active'}},
-    'school_id': {'const': 'MSEA'}, 'campus': {'col': 'EnrollmentCode', 'regex': r'^\d{2}([A-Z]+)\d+$'}, 'academic_year': {'col': 'AcademicYear'}}}
+    'school_id': {'const': 'MSEA'}, 'campus': {'col': 'EnrollmentCode', 'regex': r'^\d{2}([A-Z]+)\d+$'}, 'location': {'col': 'BranchName'},
+    'academic_year': {'col': 'AcademicYear'}}}
 
 
 @pytest.fixture()
@@ -92,7 +93,8 @@ def test_mapping_transforms_and_paging(app, fake):
     clean = erp_api.validate_mapping(MAPPING, [{'name': c} for c in COLUMNS])
     m = erp_api.apply_mapping({**make_rows(1)[0], 'StudentStatus': 'studying'}, clean)
     assert m == {'adm_no': '26TST0000', 'erp_ref': '26TST0000', 'name': 'Test Student 0', 'class_name': '1', 'section': 'A', 'gender': 'Female',
-                 'parent_mobile': '9800000000', 'status': 'Active', 'school_id': 'MSEA', 'campus': 'TST', 'academic_year': '2026-2027'}
+                 'parent_mobile': '9800000000', 'status': 'Active', 'school_id': 'MSEA', 'campus': 'TST', 'location': 'Test Branch',
+                 'academic_year': '2026-2027'}
     with app.app_context():
         rows = list(erp_api.fetch_rows(VIEW, {'AcademicYear': '2026-2027'}, sort_by='EnrollmentCode'))
     assert len(rows) == 1200
@@ -134,8 +136,9 @@ def test_trial_then_real_pull_never_duplicates(app, fake):
     real = wait_run(ok(s.post('/api/erp/sync', json={}))['run'])
     assert (real['created'], real['failed']) == (1199, 1)
     assert sql("SELECT COUNT(*) n FROM students WHERE adm_no LIKE '26TST%%'")[0]['n'] == 1199
-    row = sql("SELECT name, status, campus, school_id, gender, parent_mobile FROM students WHERE adm_no='26TST0011'")[0]
-    assert row == {'name': 'Test Student 11', 'status': 'Active', 'campus': 'TST', 'school_id': 'MSEA', 'gender': 'M', 'parent_mobile': '9800000011'}
+    row = sql("SELECT name, status, campus, location, school_id, gender, parent_mobile FROM students WHERE adm_no='26TST0011'")[0]
+    assert row == {'name': 'Test Student 11', 'status': 'Active', 'campus': 'TST', 'location': 'Test Branch', 'school_id': 'MSEA', 'gender': 'M',
+                   'parent_mobile': '9800000011'}
 
     again = wait_run(ok(s.post('/api/erp/sync', json={}))['run'])
     assert (again['created'], again['updated'], again['skipped']) == (0, 0, 1199)                        # pulling again never duplicates
