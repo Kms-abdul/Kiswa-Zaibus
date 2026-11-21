@@ -17,6 +17,7 @@ A full pull runs in a background thread: it can be tens of thousands of rows.
 """
 import re
 import threading
+import time
 from urllib.parse import quote, urlparse
 
 import requests
@@ -32,6 +33,13 @@ from . import erp
 
 TIMEOUT = 60
 PAGE = 500                       # the API's maximum page size
+PAUSE = 0.3                      # seconds between pages, to be gentle on the ERP server
+RETRIES = (2, 5, 15)             # wait and retry a page this many times when the server refuses, times out or answers 5xx
+_STOP = set()                    # run ids asked to stop (checked between pages and every 500 rows)
+
+
+class Stopped(Exception):
+    pass
 MAX_PAGES = 2000                 # safety stop (1,000,000 rows)
 REQUIRED = ('adm_no', 'erp_ref', 'name', 'class_name')
 VIEW_RE = re.compile(r'^[A-Za-z0-9_.$]{1,128}$')
@@ -131,23 +139,35 @@ def view_schema(view):
     return cols
 
 
-def fetch_rows(view, filters=None, page_size=PAGE, max_rows=None, sort_by=None):
-    """All rows of a view, page by page (skip / limit) until a short page."""
+def fetch_rows(view, filters=None, page_size=PAGE, max_rows=None, sort_by=None, stop=None):
+    """All rows of a view, page by page (skip / limit) until a short page. `stop`: callable, True = abandon (raises Stopped)."""
     _check_view(view)
     skip = got = 0
     for _ in range(MAX_PAGES):
+        if stop and stop():
+            raise Stopped()
         limit = min(page_size, max_rows - got) if max_rows else page_size
         if limit <= 0:
             return
         params = {'skip': skip, 'limit': limit, **(filters or {})}
         if sort_by:
             params['sort_by'] = sort_by
-        rows = [r for r in _list(_get(f'/views/{quote(view)}', params)) if isinstance(r, dict)]
+        for attempt, wait in enumerate((0,) + RETRIES):
+            if wait:
+                time.sleep(wait)
+            try:
+                rows = [r for r in _list(_get(f'/views/{quote(view)}', params)) if isinstance(r, dict)]
+                break
+            except ApiError as e:                        # a busy or restarting server: wait and try the same page again
+                if e.code not in ('erp_unreachable', 'erp_error') or attempt == len(RETRIES):
+                    raise
         yield from rows
         got += len(rows)
         if len(rows) < limit:
             return
         skip += len(rows)
+        if PAUSE:
+            time.sleep(PAUSE)
     raise ApiError(502, 'erp_too_many_pages', 'The ERP view returned more pages than expected; stopped for safety.')
 
 
@@ -282,13 +302,32 @@ def start_pull(by, dry_run=False):
     return {'run': run_no, 'status': 'Running', 'dry_run': dry_run}
 
 
+def stop_run(run_id, user):
+    """Stop a running pull. Works also for a run whose thread is gone (backend restarted): it is simply marked Stopped."""
+    r = db.one('SELECT id, no, status FROM erp_sync_runs WHERE id=:i', i=run_id)
+    if not r:
+        raise ApiError(404, 'not_found', 'Run not found.')
+    if r['status'] != 'Running':
+        raise conflict(f"{r['no']} is not running.", 'not_running')
+    _STOP.add(run_id)
+    db.run("UPDATE erp_sync_runs SET status='Stopped', finished_at=NOW(6) WHERE id=:i AND status='Running'", i=run_id)
+    db.insert('erp_sync_records', dict(run_id=run_id, feed='students', direction='in', source_ref='RUN', action='stopped', status='Stopped',
+                                       error=f"Stopped by {user['name']}; rows already saved stay saved.", snapshot={}))
+    audit.write('ERP pull stopped', r['no'], category='integration')
+    return {'run': r['no'], 'status': 'Stopped'}
+
+
 def _job(app, run_id, by, spec, dry_run):
+    stop = lambda: run_id in _STOP                              # noqa: E731
     with app.app_context():
         g.response_ok = True
         try:
-            rows = [apply_mapping(r, spec) for r in fetch_rows(spec['view'], spec.get('filters'), sort_by=_sort_column(spec))]
-            erp.upsert_students(rows, trigger='api', by=by, dry_run=dry_run, run_id=run_id, commit_every=500)
+            rows = [apply_mapping(r, spec) for r in fetch_rows(spec['view'], spec.get('filters'), sort_by=_sort_column(spec), stop=stop)]
+            erp.upsert_students(rows, trigger='api', by=by, dry_run=dry_run, run_id=run_id, commit_every=500, stop=stop)
             db.finish(True)
+        except Stopped:
+            db.finish(False)                                    # the run is already marked Stopped; rows committed so far stay
+            app.logger.info('ERP pull run %s stopped', run_id)
         except Exception as e:                               # noqa: BLE001 (record any failure on the run)
             db.finish(False)
             msg = e.message if isinstance(e, ApiError) else f'Unexpected error ({type(e).__name__}).'

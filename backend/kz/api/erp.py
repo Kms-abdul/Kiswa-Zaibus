@@ -26,6 +26,12 @@ def sync():
     return jsonify(svc.pull_api(g.user['name'], b.get('since'), dry_run=bool(b.get('dry_run'))))
 
 
+@bp.post('/runs/<int:rid>/stop')
+@require('import', 'ctl.int')
+def stop_run(rid):
+    return jsonify(erp_api.stop_run(rid, g.user))
+
+
 # ---------------------------------------------------------------- MCB Read-Only API: connection, views, column mapping
 @bp.get('/api/status')
 @require('view', 'ctl.int')

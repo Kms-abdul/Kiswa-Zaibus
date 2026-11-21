@@ -25,6 +25,9 @@ STUDENT_COLUMNS = ['adm_no', 'erp_ref', 'name', 'gender', 'class_name', 'section
 ALIASES = {'admission_no': 'adm_no', 'adm': 'adm_no', 'erp': 'erp_ref', 'erp_id': 'erp_ref', 'student_name': 'name', 'class': 'class_name',
            'mobile': 'parent_mobile', 'email': 'parent_email', 'school': 'school_id', 'ay': 'academic_year', 'g': 'gender', 'sec': 'section', 'cat': 'category'}
 STATUSES = {'Active', 'Inactive', 'Transferred', 'Left', 'Cancelled'}
+# column sizes of the students table (models/masters.py Student)
+MAX_LEN = {'erp_ref': 30, 'name': 120, 'class_name': 20, 'section': 5, 'parent_email': 120, 'category': 40, 'school_id': 10, 'campus': 30,
+           'academic_year': 10}
 
 
 def _norm(row):
@@ -54,10 +57,13 @@ def _validate(r):
             return 'parent mobile is not a valid 10-digit number'
     if r.get('status') and r['status'] not in STATUSES:
         return f"status must be one of {', '.join(sorted(STATUSES))}"
+    for k, n in MAX_LEN.items():                       # a value longer than its column fails this row only (not the whole run)
+        if r.get(k) and len(str(r[k])) > n:
+            return f'{k.replace("_", " ")} is longer than {n} characters ({str(r[k])[:30]}…)'
     return None
 
 
-def upsert_students(rows, *, trigger, by, dry_run=False, run_id=None, commit_every=0):
+def upsert_students(rows, *, trigger, by, dry_run=False, run_id=None, commit_every=0, stop=None):
     """run_id: a run row created beforehand (background pulls); commit_every: commit and publish the counts every N rows,
     so a long pull is visible on the screen while it works."""
     if run_id is None:
@@ -68,7 +74,10 @@ def upsert_students(rows, *, trigger, by, dry_run=False, run_id=None, commit_eve
     counts = {'created': 0, 'updated': 0, 'skipped': 0, 'failed': 0}
     for n, raw in enumerate(rows, 1):
         if commit_every and n % commit_every == 0:
-            db.run('UPDATE erp_sync_runs SET created=:c, updated=:u, skipped=:s, failed=:f WHERE id=:i',
+            if stop and stop():
+                from .erp_api import Stopped
+                raise Stopped()
+            db.run("UPDATE erp_sync_runs SET created=:c, updated=:u, skipped=:s, failed=:f WHERE id=:i AND status='Running'",
                    c=counts['created'], u=counts['updated'], s=counts['skipped'], f=counts['failed'], i=run_id)
             db.session().commit()
         r = _norm(raw)

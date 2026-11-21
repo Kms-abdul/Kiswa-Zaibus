@@ -114,7 +114,9 @@ function Erp() {
     <Panel title="Sync runs"><DataTable rows={runs.data} onRow={setSel} cols={[{ key: 'no', label: 'Run', primary: true }, { key: 'started_at', label: 'Started', render: r => when(r.started_at) },
       { key: 'trigger_type', label: 'How', render: r => r.trigger_type + (r.dry_run ? ' · trial' : '') }, { key: 'created', label: 'New', align: 'r' },
       { key: 'updated', label: 'Updated', align: 'r' }, { key: 'skipped', label: 'Unchanged', align: 'r' }, { key: 'failed', label: 'Failed', align: 'r' },
-      { key: 'status', label: 'Status', render: r => <Pill s={r.status} tone={r.status === 'Running' ? 'info' : r.status === 'Failed' ? 'bad' : r.failed ? 'warn' : 'ok'} /> }]} /></Panel>
+      { key: 'status', label: 'Status', render: r => <><Pill s={r.status} tone={r.status === 'Running' ? 'info' : r.status === 'Failed' ? 'bad' : r.status === 'Stopped' || r.failed ? 'warn' : 'ok'} />
+        {r.status === 'Running' && can('import', 'ctl.int') && <Btn kind="link" busy={busy} onClick={async (e: any) => { e.stopPropagation();
+          if (await run(() => api(`/erp/runs/${r.id}/stop`, { body: {} }), () => `${r.no} stopped. Rows already saved stay saved.`)) runs.reload(); }}>Stop</Btn>}</> }]} /></Panel>
     {sel && <Panel title={`Records of ${sel.no}`} actions={<Btn onClick={() => setSel(null)}>Close</Btn>}><DataTable rows={recs.data} cols={[{ key: 'source_ref', label: 'ERP ref', primary: true },
       { key: 'action', label: 'Action' }, { key: 'status', label: 'Status' }, { key: 'error', label: 'Error' }]} /></Panel>}
   </>;

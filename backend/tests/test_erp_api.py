@@ -72,6 +72,8 @@ def fake(monkeypatch):
     monkeypatch.setattr(Config, 'ERP_API_KEY', KEY)
     monkeypatch.setattr(Config, 'ERP_API_KEY_HEADER', 'x-api-key')
     monkeypatch.setattr(erp_api.requests, 'get', f.get)
+    monkeypatch.setattr(erp_api, 'PAUSE', 0)
+    monkeypatch.setattr(erp_api, 'RETRIES', (0.01, 0.01))
     return f
 
 
@@ -158,3 +160,32 @@ def test_wrong_key_marks_run_failed_and_permissions(app, fake, monkeypatch):
     assert c.put('/api/erp/api/mapping', json={'mapping': MAPPING}).status_code == 403
     assert c.post('/api/erp/sync', json={}).status_code == 403
     assert c.get('/api/erp/api/status').status_code == 403
+
+
+def test_retry_long_values_and_stop(app, fake, monkeypatch):
+    from kz.services import erp_api
+    s = as_user(app, SUPER)
+    # a server hiccup on one page is retried instead of failing the run
+    real_get, state = fake.get, {'n': 0}
+    def flaky(url, params=None, headers=None, timeout=None):
+        if url.endswith(f'/views/{VIEW}') and (params or {}).get('skip') == 500 and state['n'] == 0:
+            state['n'] += 1
+            raise erp_api.requests.ConnectionError('refused')
+        return real_get(url, params=params, headers=headers, timeout=timeout)
+    monkeypatch.setattr(erp_api.requests, 'get', flaky)
+    with app.app_context():
+        assert len(list(erp_api.fetch_rows(VIEW, sort_by='EnrollmentCode'))) == 1200 and state['n'] == 1
+    # a value longer than its column fails that row only, the rest is imported
+    fake.rows[3]['SectionName'] = 'New Admission'
+    ok(s.put('/api/erp/api/mapping', json={'mapping': MAPPING}))
+    st = wait_run(ok(s.post('/api/erp/sync', json={'dry_run': True}))['run'])
+    assert st['status'] == 'Completed with errors' and st['failed'] == 2
+    assert sql("SELECT COUNT(*) n FROM erp_sync_records WHERE error LIKE 'section is longer than 5 characters%%'")[0]['n'] >= 1
+    # Stop: a running pull is marked Stopped, and a stale "Running" row no longer blocks the next pull
+    rid = sql("SELECT id FROM erp_sync_runs ORDER BY id DESC LIMIT 1")[0]['id']
+    sql("UPDATE erp_sync_runs SET status='Running' WHERE id=%s", rid)
+    assert s.post('/api/erp/sync', json={}).get_json()['error'] == 'erp_running'
+    r = ok(s.post(f'/api/erp/runs/{rid}/stop', json={}))
+    assert r['status'] == 'Stopped'
+    assert s.post(f'/api/erp/runs/{rid}/stop', json={}).get_json()['error'] == 'not_running'
+    wait_run(ok(s.post('/api/erp/sync', json={'dry_run': True}))['run'])
