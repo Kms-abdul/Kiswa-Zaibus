@@ -31,7 +31,7 @@ export default function Reports() {
   const key = sp.get('r') || lib.data?.reports[0]?.key || '';
   const entry = lib.data?.reports.find(r => r.key === key);
   const [f, setF] = useState<Record<string, string>>(() => ({ from: monthStart(), to: today(),
-    ...Object.fromEntries(['company', 'from', 'to', 'branch', 'status', 'category', 'item', 'days', 'account'].filter(k => sp.get(k)).map(k => [k, sp.get(k)!])) }));
+    ...Object.fromEntries(['company', 'from', 'to', 'branch', 'status', 'category', 'item', 'days', 'account', 'campus', 'year', 'bought'].filter(k => sp.get(k)).map(k => [k, sp.get(k)!])) }));
   const [stack, setStack] = useState<{ key: string; args: Record<string, string>; title?: string }[]>([]);
   const cur = stack.length ? stack[stack.length - 1] : null;
   const curKey = cur?.key || key;
@@ -43,6 +43,10 @@ export default function Reports() {
   const rep = useLoad<{ k: string; d: Report }>(() => (curKey ? api<Report>(url).then(d => ({ k: url, d })) : Promise.resolve(null as any)), [url]);
   const r = rep.data?.k === url ? rep.data.d : null;
   const [inv, setInv] = useState<number | null>(null);
+  const STU = curKey === 'student-purchases' || curKey === 'student-purchase-list';
+  const camps = useLoad<{ code: string; name: string | null; students: number; years: string | null }[]>(
+    () => (STU ? api('/reports/campuses') : Promise.resolve(null as any)), [STU]);
+  const years = useMemo(() => [...new Set((camps.data || []).flatMap(c => (c.years || '').split(',')).filter(Boolean))].sort(), [camps.data]);
   const [sched, setSched] = useState(false);
   const canSched = can('edit', 'set') || can('cfgrep', 'rep');
   const pick = (k: string) => { setStack([]); sp.set('r', k); setSp(sp, { replace: true }); };
@@ -69,6 +73,13 @@ export default function Reports() {
             {!NO_BRANCH.has(curKey)
               && <select value={f.branch || ''} onChange={set('branch')} aria-label="Location"><option value="">All my locations</option>
                 {myBranches.filter(b => !f.company || b.company === f.company).map(b => <option key={b.id} value={b.id}>{b.company} · {b.name}</option>)}</select>}
+            {STU && <><select value={cur?.args.campus ?? f.campus ?? ''} onChange={set('campus')} aria-label="Branch code">
+              <option value="">All branches</option>
+              {(camps.data || []).map(c => <option key={c.code} value={c.code}>{c.code}{c.name ? ` · ${c.name}` : ''} ({c.students})</option>)}</select>
+              <select value={f.year || ''} onChange={set('year')} aria-label="Academic year"><option value="">All academic years</option>
+                {years.map(y => <option key={y}>{y}</option>)}</select></>}
+            {curKey === 'student-purchase-list' && <select value={f.bought || ''} onChange={set('bought')} aria-label="Purchased">
+              <option value="">Purchased and not purchased</option><option value="yes">Only who purchased</option><option value="no">Only who have not purchased</option></select>}
             {curKey === 'item-ledger' && <input value={cur?.args.item ?? f.item ?? ''} onChange={set('item')} placeholder="Item code" aria-label="Item code" />}
             {curKey === 'item-sales' && <input value={cur?.args.category ?? f.category ?? ''} onChange={set('category')} placeholder="Category (all)" aria-label="Category" />}
             {curKey === 'slow-moving' && <select value={f.days || '90'} onChange={set('days')} aria-label="No sale for">{['30', '60', '90', '180', '365'].map(d => <option key={d} value={d}>No sale for {d}+ days</option>)}</select>}
@@ -78,7 +89,7 @@ export default function Reports() {
               <input value={f.user || ''} onChange={set('user')} placeholder="User" aria-label="User" /></>}
           </div>
           {stack.length > 0 && <div className="crumbs no-print"><Btn kind="link" onClick={() => setStack([])}>{title(key)}</Btn>
-            {stack.map((s, i) => <span key={i}> › <Btn kind="link" onClick={() => setStack(st => st.slice(0, i + 1))}>{title(s.key)}{s.args.item ? ` ${s.args.item}` : ''}{s.args.branch ? ` · ${s.args.branch}` : ''}{s.args.category ? ` · ${s.args.category}` : ''}</Btn></span>)}</div>}
+            {stack.map((s, i) => <span key={i}> › <Btn kind="link" onClick={() => setStack(st => st.slice(0, i + 1))}>{title(s.key)}{s.args.item ? ` ${s.args.item}` : ''}{s.args.branch ? ` · ${s.args.branch}` : ''}{s.args.category ? ` · ${s.args.category}` : ''}{s.args.campus ? ` · ${s.args.campus}` : ''}{s.args.adm_no ? ` · ${s.args.adm_no}` : ''}</Btn></span>)}</div>}
           <ErrorNote err={rep.err} />
           <Panel>
             <div className="rep-head no-print"><h2>{r?.title || curEntry?.title || 'Report'}</h2>

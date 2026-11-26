@@ -124,7 +124,8 @@ class Student(Base):
     category: Mapped[str] = mapped_column(String(40), server_default='Regular')   # Regular, MSEA Sponsored, ...
     status: Mapped[str] = mapped_column(String(20), server_default='Active')      # Active, Transferred, Left
     school_id: Mapped[Optional[str]] = mapped_column(String(10))
-    campus: Mapped[Optional[str]] = mapped_column(String(30))
+    campus: Mapped[Optional[str]] = mapped_column(String(30), index=True)
+    branch_name: Mapped[Optional[str]] = mapped_column(String(80))   # e.g. MS Charminar Boys (the campus code's name)
     location: Mapped[Optional[str]] = mapped_column(String(60))       # city / state, e.g. Hyderabad, Maharashtra
     academic_year: Mapped[Optional[str]] = mapped_column(String(10))
     synced_at: Mapped[Optional[dt.datetime]]

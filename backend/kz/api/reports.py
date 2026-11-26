@@ -474,3 +474,11 @@ def report_library_run(key):
     else:
         (data, how), mime = docs_render.pdf(rep, meta_), 'application/pdf'
     return Response(data, mimetype=mime, headers={'Content-Disposition': f'attachment; filename="{name}.{fmt}"', 'X-Rendered-By': how})
+
+
+@bp.get('/reports/campuses')
+@require('view', 'rep')
+def campuses():
+    """Branch codes for the report filters: code, name (from the ERP pull) and the number of active students."""
+    return jsonify(db.clean(db.q('''SELECT campus code, MAX(branch_name) name, SUM(status='Active') students, GROUP_CONCAT(DISTINCT academic_year) years
+                                    FROM students WHERE campus IS NOT NULL AND campus<>'' GROUP BY campus ORDER BY campus''')))

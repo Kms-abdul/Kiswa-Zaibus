@@ -55,7 +55,7 @@ def test_every_report_every_format(app, fmt):
         else:
             assert r.get_json()['columns']
     after = sql("SELECT COUNT(*) n FROM access_log WHERE what LIKE %s", f'Report %({fmt.upper()})')[0]['n']
-    assert after - before == len(reps) == 48            # every print / export is logged; the Director sees the whole library
+    assert after - before == len(reps) == 50            # every print / export is logged; the Director sees the whole library
 
 
 def test_formats_follow_report_rights(app):
@@ -194,3 +194,31 @@ def test_empty_report_still_renders(app):
     for fn in (docs_render.pdf, docs_render.xlsx):
         data, _ = fn({'title': 'Empty', 'columns': [], 'rows': []})
         assert data
+
+
+def test_students_purchased_by_branch(app):
+    c = as_user(app, 'KZ-IT-001')
+    sql("UPDATE students SET branch_name=CONCAT('Branch ', campus) WHERE campus IS NOT NULL")
+    rep = ok(c.get(f'/api/reports/library/student-purchases?{_q(WIDE)}'))
+    hs = [x['h'] for x in rep['columns']]
+    code, n, k, no = hs.index('Branch code'), hs.index('Students'), hs.index('Purchased'), hs.index('Not purchased')
+    bought = {r['adm_no'] for r in sql('''SELECT i.adm_no FROM invoices i JOIN invoice_lines l ON l.invoice_id=i.id
+                                          WHERE i.status NOT IN ('Cancelled', 'Returned') AND i.adm_no IN (SELECT adm_no FROM students)
+                                          GROUP BY i.adm_no HAVING SUM(l.qty-l.returned_qty) > 0''')}
+    assert rep['totals'][k] == len(bought) and all(r[n] == r[k] + r[no] for r in rep['rows'])
+    assert all(r[hs.index('Branch name')] == f'Branch {r[code]}' for r in rep['rows'] if r[code] != '(no code)')
+
+    camps = ok(c.get('/api/reports/campuses'))
+    assert {x['code'] for x in camps} == {r[code] for r in rep['rows'] if r[code] != '(no code)'}
+    row = max(rep['rows'], key=lambda r: r[k])                   # the branch with most buyers: drill to its students
+    one = ok(c.get(f"/api/reports/library/student-purchase-list?{_q(WIDE)}&{_q(rep['drill'][rep['rows'].index(row)]['args'])}&bought=yes"))
+    assert len(one['rows']) == row[k] and all(x[7] == 'Yes' for x in one['rows'])
+    nope = ok(c.get(f"/api/reports/library/student-purchase-list?{_q(WIDE)}&campus={row[code]}&bought=no"))
+    assert len(nope['rows']) == row[no]
+    if one['rows']:
+        adm = one['rows'][0][0]
+        bills = ok(c.get(f"/api/reports/library/sales-register?{_q(WIDE)}&adm_no={adm}"))
+        live = sql("SELECT COUNT(*) n FROM invoices WHERE adm_no=%s", adm)[0]['n']
+        assert len(bills['rows']) == live >= one['rows'][0][8]
+    filtered = ok(c.get(f"/api/reports/library/student-purchases?{_q(WIDE)}&campus={row[code]}"))
+    assert len(filtered['rows']) == 1 and filtered['rows'][0][k] == row[k]

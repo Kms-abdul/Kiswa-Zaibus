@@ -151,6 +151,9 @@ CTL = (('view', 'audit'), ('view', 'ctl.users'))
 @R('sales-register', 'Sales', 'Sales register', SALES)
 def _sales_register(f):
     w, p = f.where('i.branch_id')
+    if f.get('adm_no'):                                  # one student's bills (from "Students purchased")
+        w += ' AND i.adm_no=:adm'
+        p['adm'] = f.get('adm_no').strip().upper()
     rows = db.q(f'''SELECT i.id, i.inv_date, i.inv_time, i.no, i.branch_id, i.channel, COALESCE(c.name, i.adm_no, 'Walk-in') party, u.name cashier, i.taxable,
                            i.cgst, i.sgst, i.igst, i.total, i.balance, i.status FROM invoices i LEFT JOIN customers c ON c.id=i.customer_id
                     LEFT JOIN users u ON u.id=i.cashier_id WHERE {w} AND i.company IN :c AND i.inv_date BETWEEN :f AND :t ORDER BY i.inv_date, i.id''',
@@ -271,6 +274,82 @@ def _school(f):
     rows = [[r['school'], r['cls'], int(r['students']), int(r['bills']), int(r['qty'] or 0), round(float(r['amount'] or 0), 2)] for r in rs]
     return out('School and class-wise sales', [C('School'), C('Class'), C('Students', 'qty'), C('Bills', 'qty'), C('Qty', 'qty'), C('Amount', 'num')], rows,
                totals=_tot(rows, [2, 3, 4, 5]))
+
+
+def _bought(f):
+    """Per student: bills, quantity and amount bought in the period (net of returns; cancelled and fully returned bills left out)."""
+    w, p = f.where('i.branch_id')
+    sql = f'''SELECT i.adm_no, COUNT(DISTINCT i.id) bills, SUM(l.qty-l.returned_qty) qty, SUM(l.amount * (l.qty-l.returned_qty) / l.qty) amount,
+                       MAX(i.inv_date) last_bill
+                FROM invoices i JOIN invoice_lines l ON l.invoice_id=i.id
+                WHERE {w} AND i.company IN :c AND i.inv_date BETWEEN :f AND :t AND i.status NOT IN ('Cancelled', 'Returned') AND i.adm_no IS NOT NULL
+                GROUP BY i.adm_no HAVING SUM(l.qty-l.returned_qty) > 0'''
+    return sql, dict(c=f.cos, f=f.frm, t=f.to, **p)
+
+
+def _student_where(f):
+    """Which students: active ones (or anyone who bought), of one campus / academic year when chosen."""
+    w, p = "(s.status='Active' OR b.adm_no IS NOT NULL)", {}
+    if f.get('campus'):
+        w += ' AND s.campus=:campus'
+        p['campus'] = f.get('campus').strip().upper()
+    if f.get('year'):
+        w += ' AND s.academic_year=:year'
+        p['year'] = f.get('year').strip()
+    return w, p
+
+
+@R('student-purchases', 'Sales', 'Students purchased by branch', SALES)
+def _student_purchases(f):
+    bsql, bp = _bought(f)
+    sw, sp = _student_where(f)
+    rs = db.q(f'''WITH b AS ({bsql})
+                  SELECT COALESCE(s.campus, '') campus, MAX(s.branch_name) branch, MAX(s.location) location, COUNT(*) students,
+                         COUNT(b.adm_no) bought, SUM(b.bills) bills, SUM(b.qty) qty, SUM(b.amount) amount
+                  FROM students s LEFT JOIN b ON b.adm_no=s.adm_no WHERE {sw}
+                  GROUP BY COALESCE(s.campus, '') ORDER BY campus''', **bp, **sp)
+    rows = []
+    for r in rs:
+        n, k = int(r['students']), int(r['bought'])
+        rows.append([r['campus'] or '(no code)', r['branch'] or '', r['location'] or '', n, k, n - k, round(k / n * 100, 1) if n else 0,
+                     int(r['bills'] or 0), int(r['qty'] or 0), round(float(r['amount'] or 0), 2)])
+    tot = _tot(rows, [3, 4, 5, 7, 8, 9])
+    if tot:
+        tot[6] = round(tot[4] / tot[3] * 100, 1) if tot[3] else 0
+    cols = [C('Branch code'), C('Branch name'), C('Location'), C('Students', 'qty'), C('Purchased', 'qty'), C('Not purchased', 'qty'),
+            C('% purchased', 'pct'), C('Bills', 'qty'), C('Qty', 'qty'), C('Amount', 'num')]
+    drill = [{'report': 'student-purchase-list', 'args': {'campus': r[0] if r[0] != '(no code)' else ''}} for r in rows]
+    return out('Students purchased by branch', cols, rows, drill, totals=tot,
+               note='Students: active students of the branch (and anyone who bought). Purchased: at least one bill in the period, '
+                    'net of returns; cancelled and fully returned bills are not counted.')
+
+
+LIST_CAP = 5000
+
+
+@R('student-purchase-list', 'Sales', 'Students purchased: student list', SALES)
+def _student_purchase_list(f):
+    bsql, bp = _bought(f)
+    sw, sp = _student_where(f)
+    bought = (f.get('bought') or '').lower()
+    if bought == 'yes':
+        sw += ' AND b.adm_no IS NOT NULL'
+    elif bought == 'no':
+        sw += ' AND b.adm_no IS NULL'
+    rs = db.q(f'''WITH b AS ({bsql})
+                  SELECT s.adm_no, s.name, s.campus, s.branch_name, s.class_name, s.section, s.status, b.bills, b.qty, b.amount, b.last_bill
+                  FROM students s LEFT JOIN b ON b.adm_no=s.adm_no WHERE {sw}
+                  ORDER BY s.campus, s.class_name, s.section, s.name LIMIT {LIST_CAP + 1}''', **bp, **sp)
+    more = len(rs) > LIST_CAP
+    rows = [[r['adm_no'], r['name'], r['campus'] or '', r['branch_name'] or '', r['class_name'], r['section'] or '', r['status'],
+             'Yes' if r['bills'] else 'No', int(r['bills'] or 0), int(r['qty'] or 0), round(float(r['amount'] or 0), 2), r['last_bill']]
+            for r in rs[:LIST_CAP]]
+    cols = [C('Admission no'), C('Student'), C('Branch code'), C('Branch name'), C('Class'), C('Section'), C('Status'), C('Purchased'),
+            C('Bills', 'qty'), C('Qty', 'qty'), C('Amount', 'num'), C('Last bill', 'date')]
+    drill = [{'report': 'sales-register', 'args': {'adm_no': r[0]}} if r[8] else None for r in rows]
+    title = 'Students ' + {'yes': 'who purchased', 'no': 'who have not purchased'}.get(bought, 'and their purchases') +             (f" · {f.get('campus').upper()}" if f.get('campus') else '')
+    return out(title, cols, rows, drill, totals=_tot(rows, [8, 9, 10]),
+               note=f'Showing the first {LIST_CAP:,} students; choose a branch code to see one branch in full.' if more else None)
 
 
 @R('category-sales', 'Sales', 'Category-wise sales', SALES)

@@ -21,13 +21,13 @@ from ..core.numbering import next_no
 from ..errors import ApiError, bad
 
 STUDENT_COLUMNS = ['adm_no', 'erp_ref', 'name', 'gender', 'class_name', 'section', 'parent_mobile', 'parent_email', 'category', 'status',
-                   'school_id', 'campus', 'location', 'academic_year']
+                   'school_id', 'campus', 'branch_name', 'location', 'academic_year']
 ALIASES = {'admission_no': 'adm_no', 'adm': 'adm_no', 'erp': 'erp_ref', 'erp_id': 'erp_ref', 'student_name': 'name', 'class': 'class_name',
            'mobile': 'parent_mobile', 'email': 'parent_email', 'school': 'school_id', 'ay': 'academic_year', 'g': 'gender', 'sec': 'section', 'cat': 'category'}
 STATUSES = {'Active', 'Inactive', 'Transferred', 'Left', 'Cancelled'}
 # column sizes of the students table (models/masters.py Student)
 MAX_LEN = {'erp_ref': 30, 'name': 120, 'class_name': 60, 'section': 30, 'parent_email': 120, 'category': 40, 'school_id': 10, 'campus': 30,
-           'location': 60, 'academic_year': 10}
+           'branch_name': 80, 'location': 60, 'academic_year': 10}
 
 
 def _norm(row):
