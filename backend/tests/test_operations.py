@@ -160,7 +160,15 @@ def test_sponsored_voucher_issue(app):
     mc = as_user(app, MSEA_CO)
     v = ok(mc.post('/api/msea/vouchers', json={'adm_no': 'MSA260116', 'company': 'KG', 'scope': 'Uniform', 'max_value': 2000,
                                                'entitlement': {'Shirt': 2, 'Tie': 1}}), 201)
-    assert mc.post('/api/msea/vouchers', json={'adm_no': 'MSA260104', 'company': 'KG', 'max_value': 100, 'entitlement': {'Shirt': 1}}).get_json()['error'] == 'not_sponsored'
+    regular = sql("SELECT adm_no FROM students WHERE category='Regular' AND status='Active' AND adm_no NOT IN ('MSA260104', 'MSA260116') ORDER BY adm_no DESC LIMIT 1")[0]['adm_no']
+    rv = ok(mc.post('/api/msea/vouchers', json={'adm_no': regular, 'company': 'ZE', 'max_value': 100, 'entitlement': {'Books': 1}}), 201)
+    assert rv['no']                                                     # a Regular student qualifies (full fee paid -> school voucher)
+    sql("UPDATE students SET status='Left' WHERE adm_no=%s", 'MSA260104')
+    try:
+        assert mc.post('/api/msea/vouchers', json={'adm_no': 'MSA260104', 'company': 'KG', 'max_value': 100,
+                                                   'entitlement': {'Shirt': 1}}).get_json()['error'] == 'student_not_active'
+    finally:
+        sql("UPDATE students SET status='Active' WHERE adm_no=%s", 'MSA260104')
     ok(approve(app, v['approval']['no'], CFO))
     c = as_user(app, CASHIER)
     open_shift(c)

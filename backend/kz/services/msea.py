@@ -1,6 +1,6 @@
 """MSEA sponsorship vouchers.
 
-The MSEA Coordinator raises a voucher for a sponsored student (entitlement per category and a maximum value);
+The MSEA Coordinator raises a voucher for a student (any category, e.g. a Regular student whose parent paid the full fee) (entitlement per category and a maximum value);
 it is approved (Accounts Manager or above, by value) and then the counter issues items against it with POS
 `voucher_no`. The bill goes to the MSEA receivable (1210) instead of being paid by the parent.
 """
@@ -23,9 +23,10 @@ def create_voucher(d):
     st = db.one('SELECT * FROM students WHERE adm_no=:a', a=d.get('adm_no'))
     if not st:
         raise not_found('Student not found.', 'unknown_student')
-    sponsored = {c[0] for c in (setting('student_categories', []) or []) if len(c) > 1 and c[1]}
-    if st['category'] not in sponsored:
-        raise conflict(f"{st['name']} is in category {st['category']}, which is not sponsored. Update the category in the ERP first.", 'not_sponsored')
+    # Any category may get a voucher: the school gives one when the parent has paid the full tuition fee, so Regular students qualify.
+    # (The "sponsored" flag in Settings -> Student categories only decides who cannot buy online.) Only active students.
+    if (st.get('status') or 'Active') != 'Active':
+        raise conflict(f"{st['name']} is {st['status']} in the ERP; a voucher needs an active student.", 'student_not_active')
     co = d.get('company')
     if co not in u['companies']:
         raise bad('Choose the company (Kiswa for uniforms, Zaibus for books).', 'company_denied')
