@@ -55,7 +55,7 @@ def test_every_report_every_format(app, fmt):
         else:
             assert r.get_json()['columns']
     after = sql("SELECT COUNT(*) n FROM access_log WHERE what LIKE %s", f'Report %({fmt.upper()})')[0]['n']
-    assert after - before == len(reps) == 50            # every print / export is logged; the Director sees the whole library
+    assert after - before == len(reps) == 52            # every print / export is logged; the Director sees the whole library
 
 
 def test_formats_follow_report_rights(app):
@@ -210,8 +210,13 @@ def test_students_purchased_by_branch(app):
 
     camps = ok(c.get('/api/reports/campuses'))
     assert {x['code'] for x in camps} == {r[code] for r in rep['rows'] if r[code] != '(no code)'}
-    row = max(rep['rows'], key=lambda r: r[k])                   # the branch with most buyers: drill to its students
-    one = ok(c.get(f"/api/reports/library/student-purchase-list?{_q(WIDE)}&{_q(rep['drill'][rep['rows'].index(row)]['args'])}&bought=yes"))
+    row = max(rep['rows'], key=lambda r: r[k])                   # the branch with most buyers: drill to its classes, then students
+    cls = ok(c.get(f"/api/reports/library/student-purchases-class?{_q(WIDE)}&{_q(rep['drill'][rep['rows'].index(row)]['args'])}"))
+    assert sum(r[5] for r in cls['rows']) == row[k] and sum(r[4] for r in cls['rows']) == row[n]
+    top = max(cls['rows'], key=lambda r: r[5])
+    in_cls = ok(c.get(f"/api/reports/library/student-purchase-list?{_q(WIDE)}&{_q(cls['drill'][cls['rows'].index(top)]['args'])}"))
+    assert len(in_cls['rows']) == top[4] and sum(x[7] == 'Yes' for x in in_cls['rows']) == top[5]
+    one = ok(c.get(f"/api/reports/library/student-purchase-list?{_q(WIDE)}&campus={row[code]}&bought=yes"))
     assert len(one['rows']) == row[k] and all(x[7] == 'Yes' for x in one['rows'])
     nope = ok(c.get(f"/api/reports/library/student-purchase-list?{_q(WIDE)}&campus={row[code]}&bought=no"))
     assert len(nope['rows']) == row[no]
@@ -220,5 +225,11 @@ def test_students_purchased_by_branch(app):
         bills = ok(c.get(f"/api/reports/library/sales-register?{_q(WIDE)}&adm_no={adm}"))
         live = sql("SELECT COUNT(*) n FROM invoices WHERE adm_no=%s", adm)[0]['n']
         assert len(bills['rows']) == live >= one['rows'][0][8]
+        assert one['drill'][0] == {'report': 'student-items', 'args': {'adm_no': adm}}
+        items = ok(c.get(f"/api/reports/library/student-items?{_q(WIDE)}&adm_no={adm.lower()}"))
+        assert items['rows'] and adm in items['note'] and abs(items['totals'][8] - one['rows'][0][10]) < 0.05   # same amount both ways
+        found = ok(c.get(f"/api/reports/library/student-purchase-list?{_q(WIDE)}&q={adm[-4:]}"))
+        assert adm in [x[0] for x in found['rows']]
+    assert ok(c.get(f"/api/reports/library/student-items?{_q(WIDE)}"))['rows'] == []
     filtered = ok(c.get(f"/api/reports/library/student-purchases?{_q(WIDE)}&campus={row[code]}"))
     assert len(filtered['rows']) == 1 and filtered['rows'][0][k] == row[k]
