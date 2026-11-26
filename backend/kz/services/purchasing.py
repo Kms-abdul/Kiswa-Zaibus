@@ -102,6 +102,9 @@ def submit(po_id, d):
         cheapest = min(po.quotes, key=lambda x: sum(Decimal(r) * ln.qty for r, ln in zip(x.rates, po.lines)))
         if cheapest.supplier_id != s.id and not str(d.get('reason') or '').strip():
             raise bad('You chose a supplier who is not the cheapest. Give the reason.', 'reason_required')
+    zero = [ln.line_no for ln in po.lines if Decimal(str(ln.rate or 0)) <= 0]
+    if zero:                                             # a PO at Rs 0 could be approved but never received (GRN value 0)
+        raise bad(f"Line(s) {', '.join(map(str, zero))} have no rate. Record the supplier's quote (rates) before submitting the PO.", 'bad_rate')
     po.supplier_id = s.id
     po.value = money(sum(Decimal(str(ln.rate)) * ln.qty for ln in po.lines))
     role = role_for_limit(u, 'po', po.value, txn_type='po', branch=po.branch_id)
@@ -165,6 +168,9 @@ def receive(po_id, d):
         work.append((ln, rq, rj, acc))
         accepted_value += acc * Decimal(str(ln.rate))
     if accepted_value <= 0:
+        if any(acc > 0 for _, _, _, acc in work):
+            raise bad(f'{po.no} has no rates (value Rs 0), so goods cannot be received against it. Cancel this PO and raise a new one '
+                      'with the supplier rates.', 'po_without_rate')
         raise bad('Enter accepted quantities before posting the GRN.', 'nothing_received')
     freight = money(d.get('freight', po.freight if not po.grn_value else 0))
     grn = GoodsReceipt(no=next_no(po.company, 'GRN', date), po_id=po.id, txn_date=date, value=0, line_items=[], received_by=u['id'])

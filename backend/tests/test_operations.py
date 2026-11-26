@@ -191,6 +191,9 @@ def test_sponsored_voucher_issue(app):
 # ---------------------------------------------------------------- purchasing
 def test_purchase_to_payment(app):
     im = as_user(app, INV_MGR)
+    free = ok(im.post('/api/purchasing/orders', json={'branch_id': 'KG-MYJ', 'lines': [{'item_id': 'KG-MSA-TIE-Std', 'qty': 5, 'rate': 0}]}), 201)
+    assert im.post(f"/api/purchasing/orders/{free['id']}/submit", json={'supplier_id': 'KS1'}).get_json()['error'] == 'bad_rate'   # no Rs 0 POs
+    ok(im.post(f"/api/purchasing/orders/{free['id']}/cancel", json={'reason': 'test: no rate'}))
     po = ok(im.post('/api/purchasing/orders', json={'branch_id': 'KG-MYJ', 'lines': [{'item_id': 'KG-MSA-SHT-24', 'qty': 100, 'rate': 200},
                                                                                      {'item_id': 'KG-MSA-TIE-Std', 'qty': 50, 'rate': 40}], 'freight': 500}), 201)
     ok(im.post(f"/api/purchasing/orders/{po['id']}/quotes", json={'supplier_id': 'KS1', 'rates': [200, 40]}))
