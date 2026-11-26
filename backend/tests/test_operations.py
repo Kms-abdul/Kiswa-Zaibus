@@ -173,6 +173,7 @@ def test_sponsored_voucher_issue(app):
     finally:
         sql("UPDATE students SET status='Active' WHERE adm_no=%s", 'MSA260104')
     ok(approve(app, v['approval']['no'], CFO))
+    sql("DELETE FROM customers WHERE id='KG-MSEA'")                      # a database set up from empty has no MSEA customer yet
     c = as_user(app, CASHIER)
     open_shift(c)
     over = c.post('/api/pos/invoices', json={'branch_id': 'KG-MSA', 'voucher_no': v['no'], 'lines': [{'item_id': 'KG-MSA-SHT-24', 'qty': 3}]})

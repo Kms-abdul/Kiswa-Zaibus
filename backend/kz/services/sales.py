@@ -89,6 +89,18 @@ def student_customer(company, st):
     return c
 
 
+def msea_customer(company):
+    """MS Education Academy, billed for voucher issues (receivable 1210). Made on first use, so a database set up from empty works too."""
+    cid = f'{company}-MSEA'
+    c = db.session().get(Customer, cid)
+    if not c:
+        c = Customer(id=cid, company=company, type='Institution', name='MS Education Academy (sponsorships)', receivable_account='1210',
+                     credit_limit=0)
+        db.add(c)
+        db.session().flush()
+    return c
+
+
 def _student(adm_no, branch_loc=None):
     st = db.one('SELECT * FROM students WHERE adm_no=:a', a=adm_no)
     if not st:
@@ -152,7 +164,7 @@ def post_invoice(d, *, approved=None):
         if not voucher:
             raise not_found('Voucher not found.', 'unknown_voucher')
         st = _student(voucher.adm_no)
-        cust = db.session().get(Customer, f'{co}-MSEA')
+        cust = msea_customer(co)
     elif d.get('adm_no'):
         st = _student(d['adm_no'])
         cust = student_customer(co, st)
