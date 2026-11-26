@@ -12,7 +12,6 @@ from .. import db
 from ..core import audit
 from ..core.approvals import handler, on_reject, request as approval_request, role_for_limit
 from ..core.numbering import next_no
-from ..core.security import setting
 from ..errors import bad, conflict, not_found
 from ..models import MseaVoucher
 from .common import money, parse_date, today
