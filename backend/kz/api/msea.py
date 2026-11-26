@@ -25,7 +25,7 @@ def vouchers():
     return jsonify(db.clean(db.q(sql + ' ORDER BY v.created_at DESC LIMIT 300', **p)))
 
 
-@bp.get('/vouchers/<no>')
+@bp.get('/vouchers/<path:no>')
 @require('view', 'msea')
 def voucher(no):
     v = db.session().get(MseaVoucher, no)
@@ -44,7 +44,7 @@ def create():
     return jsonify({'no': v.no, 'status': v.status, 'approval': a}), 201
 
 
-@bp.post('/vouchers/<no>/cancel')
+@bp.post('/vouchers/<path:no>/cancel')
 @require('cancel', 'msea')
 def cancel(no):
     v = svc.cancel_voucher(no, body().get('reason'))

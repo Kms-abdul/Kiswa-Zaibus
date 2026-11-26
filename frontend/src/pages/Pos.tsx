@@ -59,7 +59,19 @@ export default function Pos() {
   const upd = (i: number, p: Partial<Line>) => setLines(ls => ls.map((l, k) => (k === i ? { ...l, ...p } : l)));
   const loadVoucher = async () => {
     try {
-      const v = await api(`/msea/vouchers/${encodeURIComponent(voucherNo.trim())}`);
+      const typed = voucherNo.trim().toUpperCase();
+      let no = typed;
+      if (!typed.includes('/')) {                     // an admission number: the student's open voucher for this company
+        const open = (await api<any[]>(`/msea/vouchers?adm_no=${encodeURIComponent(typed)}`))
+          .filter(x => ['Approved', 'Partly used'].includes(x.status));
+        const mine = open.filter(x => x.company === company);
+        if (!mine.length) {
+          toast(open.length ? `${typed} has a voucher for ${coName(open[0].company)}, not this company.` : `No approved voucher for ${typed}.`, 'bad');
+          return;
+        }
+        no = mine[0].no;
+      }
+      const v = await api(`/msea/vouchers/${no.split('/').map(encodeURIComponent).join('/')}`);
       if (v.company !== company) { toast(`Voucher ${v.no} is for ${coName(v.company)}.`, 'bad'); return; }
       setVoucher(v); setStudent(v.student);
     } catch (e) { toast(errText(e), 'bad'); }
@@ -126,7 +138,7 @@ export default function Pos() {
               : student ? <div className="stu"><b>{student.name}</b> <span className="mono">{student.adm_no}</span> · Class {student.class_name}{student.section ? '-' + student.section : ''} · <Pill s={student.category} tone="info" /> {student.status !== 'Active' && <Pill s={student.status} />}
                   <Btn kind="link" onClick={() => { setStudent(null); focus('Find student'); }}>Change</Btn></div>
                 : <StudentSearch onPick={pickStudent} placeholder="Admission no., name or parent mobile — or scan the ID card (F2)" />}
-            {!voucher && !student && <div className="row"><input placeholder="or MSEA voucher no." value={voucherNo} onChange={e => setVoucherNo(e.target.value)} aria-label="Voucher number" /><Btn onClick={loadVoucher} disabled={!voucherNo}>Use voucher</Btn></div>}
+            {!voucher && !student && <div className="row"><input placeholder="or MSEA voucher no. / admission no." value={voucherNo} onChange={e => setVoucherNo(e.target.value)} aria-label="Voucher number" /><Btn onClick={loadVoucher} disabled={!voucherNo}>Use voucher</Btn></div>}
           </Panel>
           <Panel title="Items">
             <ItemSearch company={company} onPick={it => { add(it); focus('Find item'); }} placeholder="Scan barcode / ISBN or type the item name (F3)" />

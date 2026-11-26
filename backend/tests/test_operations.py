@@ -163,6 +163,9 @@ def test_sponsored_voucher_issue(app):
     regular = sql("SELECT adm_no FROM students WHERE category='Regular' AND status='Active' AND adm_no NOT IN ('MSA260104', 'MSA260116') ORDER BY adm_no DESC LIMIT 1")[0]['adm_no']
     rv = ok(mc.post('/api/msea/vouchers', json={'adm_no': regular, 'company': 'ZE', 'max_value': 100, 'entitlement': {'Books': 1}}), 201)
     assert rv['no']                                                     # a Regular student qualifies (full fee paid -> school voucher)
+    got = ok(mc.get(f"/api/msea/vouchers/{rv['no']}"))                # numbers contain slashes (ZE/MSV/2627/0001)
+    assert got['no'] == rv['no'] and got['student']['adm_no'] == regular
+    assert [x['no'] for x in ok(mc.get(f'/api/msea/vouchers?adm_no={regular}'))] == [rv['no']]
     sql("UPDATE students SET status='Left' WHERE adm_no=%s", 'MSA260104')
     try:
         assert mc.post('/api/msea/vouchers', json={'adm_no': 'MSA260104', 'company': 'KG', 'max_value': 100,
