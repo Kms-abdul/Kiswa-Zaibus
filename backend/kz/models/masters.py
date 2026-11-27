@@ -146,7 +146,8 @@ class Customer(Base):
 
 
 class MseaVoucher(Base):
-    """Sponsorship voucher: MSEA pays for a sponsored student's items up to an entitlement."""
+    """MSEA voucher: MSEA pays pay_pct % of each bill (NULL = all of it), up to max_value in total (NULL = no amount limit); the parent
+    pays the rest at the counter. Only the amount or valid_to closes it; entitlement lists the categories it is for (quantities are a guide)."""
     __tablename__ = 'msea_vouchers'
     no: Mapped[str] = mapped_column(String(30), primary_key=True)
     adm_no: Mapped[str] = mapped_column(String(20), index=True)
@@ -154,7 +155,8 @@ class MseaVoucher(Base):
     scope: Mapped[str] = mapped_column(String(60))                        # e.g. "Full uniform set", "Books Term 1"
     entitlement: Mapped[dict] = mapped_column(JSON)                       # {category: qty}
     used_qty: Mapped[dict] = mapped_column(JSON)                          # {category: qty issued}
-    max_value: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    max_value: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
+    pay_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
     used_value: Mapped[Decimal] = mapped_column(Numeric(12, 2), server_default='0')
     valid_to: Mapped[dt.date]
     status: Mapped[str] = mapped_column(String(20))                       # Pending approval Approved Partly used Fully used Cancelled Expired Rejected

@@ -45,7 +45,11 @@ export default function Pos() {
     return () => clearTimeout(t);
   }, [lines, company, voucher]);
   const total = quote?.totals?.total || 0;
-  useEffect(() => { if (pays.length === 1 && !voucher) setPays([{ ...pays[0], amount: total ? String(total) : '' }]); }, [total]); // eslint-disable-line react-hooks/exhaustive-deps
+  // voucher bill: MSEA pays its percentage (up to what is left on the voucher), the parent pays the rest now
+  const mseaPart = voucher ? Math.round(Math.min(total * (voucher.pay_pct != null ? Number(voucher.pay_pct) : 100) / 100,
+    voucher.remaining != null ? Number(voucher.remaining) : Infinity) * 100) / 100 : 0;
+  const due = Math.round((total - mseaPart) * 100) / 100;               // what the parent pays at the counter
+  useEffect(() => { if (pays.length === 1) setPays([{ ...pays[0], amount: due ? String(due) : '' }]); }, [due]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const add = (it: any, qty = 1, package_name?: string, disc = 0) => {
     if (it.company && it.company !== company) { toast(`${it.name} belongs to ${coName(it.company)}. Switch company to bill it.`, 'bad'); return; }
@@ -81,7 +85,7 @@ export default function Pos() {
   const change = Number(tendered) > 0 ? Number(tendered) - cashPart : 0;
   // what stops the bill, said plainly next to the button
   const blocker = !branch ? 'Choose a working location (top bar)' : !student && !voucher ? 'Choose the student first (F2)' : !lines.length ? 'Add items (F3)'
-    : !voucher && total > 0 && Math.abs(paid - total) > 0.009 ? `Payments ${inr(paid)} do not match the total ${inr(total)}` : '';
+    : due > 0 && Math.abs(paid - due) > 0.009 ? (voucher ? `The parent pays ${inr(due)}; payments entered ${inr(paid)}` : `Payments ${inr(paid)} do not match the total ${inr(total)}`) : '';
   // focus now (so a fast scanner or typist loses nothing), and again after React re-renders the field
   const focus = (label: string) => { const f = () => (document.querySelector(`[aria-label="${label}"]`) as HTMLInputElement | null)?.focus(); f(); setTimeout(f, 30); };
   const pickStudent = (st: any) => { setStudent(st); focus('Find item'); };
@@ -111,7 +115,8 @@ export default function Pos() {
       pending_reason: pendingReason || undefined, stock_override_reason: needOverride ? overrideReason : undefined,
     };
     if (voucher) body.voucher_no = voucher.no;
-    else { body.adm_no = student?.adm_no; body.payments = pays.filter(p => Number(p.amount) > 0).map(p => ({ mode: p.mode, amount: Number(p.amount), ref: p.ref || undefined })); }
+    else body.adm_no = student?.adm_no;
+    if (due > 0) body.payments = pays.filter(p => Number(p.amount) > 0).map(p => ({ mode: p.mode, amount: Number(p.amount), ref: p.ref || undefined }));
     try {
       const r: any = await api('/pos/invoices', { body });
       if (r.held) { toast(r.message, 'info'); reset(); return; }
@@ -165,17 +170,19 @@ export default function Pos() {
           <Panel title="Payment">
             {quote && <Kv items={[['Items', inr(quote.totals.gross)], ['Discount', quote.totals.discount ? '− ' + inr(quote.totals.discount) : undefined], ['Taxable', inr(quote.totals.taxable)], ['GST', inr(quote.totals.tax)], ['Round off', quote.totals.round_off ? inr(quote.totals.round_off) : undefined]]} />}
             <div className="grand">Total <b>{inr(total)}</b></div>
-            {voucher ? <p className="note info">Billed to MS Education Academy against the voucher. No cash is collected from the student.</p> : <>
+            {voucher && <p className="note info">{voucher.terms}. MSEA pays <b>{inr(mseaPart)}</b> of this bill against the voucher
+              {voucher.remaining != null && <> (left on the voucher: {inr(voucher.remaining)})</>}{due > 0 ? <>; the parent pays <b>{inr(due)}</b> now.</> : '. Nothing is collected from the parent.'}</p>}
+            {due > 0 && <>
               {pays.map((p, i) => (
                 <div key={i} className="payrow">
-                  <select value={p.mode} onChange={e => setPays(ps => ps.map((x, k) => (k === i ? { ...x, mode: e.target.value } : x)))} aria-label="Mode">{MODES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>
+                  <select value={p.mode} onChange={e => setPays(ps => ps.map((x, k) => (k === i ? { ...x, mode: e.target.value } : x)))} aria-label="Mode">{MODES.filter(([k]) => !voucher || !['wallet', 'credit'].includes(k)).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>
                   <input inputMode="decimal" placeholder="Amount" value={p.amount} onChange={e => setPays(ps => ps.map((x, k) => (k === i ? { ...x, amount: e.target.value } : x)))} aria-label="Amount" />
                   {p.mode !== 'cash' && p.mode !== 'wallet' && <input placeholder="Ref / UTR" value={p.ref} onChange={e => setPays(ps => ps.map((x, k) => (k === i ? { ...x, ref: e.target.value } : x)))} aria-label="Reference" />}
                   {pays.length > 1 && <button className="x" onClick={() => setPays(ps => ps.filter((_, k) => k !== i))} aria-label="Remove payment">×</button>}
                 </div>
               ))}
-              <div className="row"><Btn kind="link" onClick={() => setPays(ps => [...ps, { mode: 'upi', amount: String(Math.max(0, total - paid) || ''), ref: '' }])}>+ Split payment</Btn>
-                {Math.abs(paid - total) > 0.009 && total > 0 && <span className="warn-text">Payments {inr(paid)} ≠ total</span>}</div>
+              <div className="row"><Btn kind="link" onClick={() => setPays(ps => [...ps, { mode: 'upi', amount: String(Math.max(0, due - paid) || ''), ref: '' }])}>+ Split payment</Btn>
+                {Math.abs(paid - due) > 0.009 && due > 0 && <span className="warn-text">Payments {inr(paid)} ≠ {voucher ? 'parent part' : 'total'}</span>}</div>
               {cashPart > 0 && <Field label="Cash received (for change) · F8">
                 <input inputMode="decimal" value={tendered} onChange={e => setTendered(e.target.value)} aria-label="Cash received" placeholder={String(cashPart)} />
                 <div className="notes" aria-label="Quick amounts">{notes.map(n => <button key={n} type="button" className={Number(tendered) === n ? 'on' : ''} onClick={() => setTendered(String(n))}>{n === cashPart ? 'Exact' : inr(n, 0)}</button>)}</div>

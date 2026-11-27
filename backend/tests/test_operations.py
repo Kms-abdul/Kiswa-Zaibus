@@ -176,17 +176,50 @@ def test_sponsored_voucher_issue(app):
     sql("DELETE FROM customers WHERE id='KG-MSEA'")                      # a database set up from empty has no MSEA customer yet
     c = as_user(app, CASHIER)
     open_shift(c)
-    over = c.post('/api/pos/invoices', json={'branch_id': 'KG-MSA', 'voucher_no': v['no'], 'lines': [{'item_id': 'KG-MSA-SHT-24', 'qty': 3}]})
-    assert over.get_json()['error'] == 'voucher_check_failed'
+    other = sql("SELECT id FROM items WHERE company='KG' AND category NOT IN ('Shirt', 'Tie') AND active=1 LIMIT 1")[0]['id']
+    off = c.post('/api/pos/invoices', json={'branch_id': 'KG-MSA', 'voucher_no': v['no'], 'lines': [{'item_id': other, 'qty': 1}]})
+    assert off.get_json()['error'] == 'voucher_check_failed'            # only the categories on the voucher
     inv = ok(c.post('/api/pos/invoices', json={'branch_id': 'KG-MSA', 'voucher_no': v['no'], 'lines': [{'item_id': 'KG-MSA-SHT-24', 'qty': 2}]}), 201)
     assert inv['channel'] == 'sponsored' and inv['issue_no'] and inv['balance'] == inv['total']
-    assert sql('SELECT status FROM msea_vouchers WHERE no=%s', v['no'])[0]['status'] == 'Partly used'
+    assert sql('SELECT status FROM msea_vouchers WHERE no=%s', v['no'])[0]['status'] == 'Partly used'   # quantities used, money left: stays open
     bill = ok(as_user(app, CFO).get('/api/msea/billing'))
     assert any(b['company'] == 'KG' and b['outstanding'] >= inv['total'] for b in bill)
     # MSEA pays: receipt clears the sponsored invoice
     r = ok(as_user(app, CFO).post('/api/accounts/receipts', json={'company': 'KG', 'customer_id': 'KG-MSEA', 'amount': inv['total'], 'mode': 'bank', 'utr': 'UTR9'}), 201)
     assert r['applied'][0][0] == inv['no']
     assert sql('SELECT balance FROM invoices WHERE id=%s', inv['id'])[0]['balance'] == 0
+
+
+def test_voucher_percentage_parent_pays_rest(app):
+    """MSEA pays 50 % of each bill up to Rs 300; the parent pays the other half; a return goes back in the same proportion."""
+    mc = as_user(app, MSEA_CO)
+    adm = sql("""SELECT s.adm_no FROM students s WHERE s.status='Active' AND NOT EXISTS (SELECT 1 FROM msea_vouchers v WHERE v.adm_no=s.adm_no)
+                 ORDER BY s.adm_no LIMIT 1""")[0]['adm_no']
+    assert mc.post('/api/msea/vouchers', json={'adm_no': adm, 'company': 'KG'}).get_json()['error'] == 'bad_amount'      # neither % nor amount
+    assert mc.post('/api/msea/vouchers', json={'adm_no': adm, 'company': 'KG', 'pay_pct': 120}).get_json()['error'] == 'bad_percentage'
+    v = ok(mc.post('/api/msea/vouchers', json={'adm_no': adm, 'company': 'KG', 'pay_pct': 50, 'max_value': 300, 'entitlement': {}}), 201)
+    ok(approve(app, v['approval']['no'], CFO))
+    d = ok(mc.get(f"/api/msea/vouchers/{v['no']}"))
+    assert d['terms'] == 'MSEA pays 50 % of each bill, up to Rs 300.00' and float(d['remaining']) == 300
+    c = as_user(app, CASHIER)
+    open_shift(c)
+    body = {'branch_id': 'KG-MSA', 'voucher_no': v['no'], 'lines': [{'item_id': 'KG-MSA-TIE-Std', 'qty': 2}]}
+    assert c.post('/api/pos/invoices', json=body).get_json()['error'] == 'payment_mismatch'   # the parent's half is not paid
+    total = ok(c.post('/api/pos/quote', json={'company': 'KG', 'sponsored': True, 'lines': [{'item_id': 'KG-MSA-TIE-Std', 'qty': 2}]}))['totals']['total']
+    half = round(total / 2, 2)
+    inv = ok(c.post('/api/pos/invoices', json={**body, 'payments': [{'mode': 'cash', 'amount': round(total - half, 2)}]}), 201)
+    assert abs(inv['balance'] - half) < 0.01                               # MSEA owes its half; the parent paid the rest
+    vr = sql('SELECT used_value, status FROM msea_vouchers WHERE no=%s', v['no'])[0]
+    assert abs(float(vr['used_value']) - half) < 0.01 and vr['status'] == 'Partly used'
+    assert c.post('/api/pos/invoices', json={**body, 'payments': [{'mode': 'wallet', 'amount': round(total - half, 2)}]}).get_json()['error'] == 'bad_payment_mode'
+    ic = as_user(app, INCHARGE)
+    open_shift(ic)
+    r = ok(ic.post(f"/api/pos/invoices/{inv['id']}/return", json={'lines': [{'line_no': 1, 'qty': 1}], 'refund_mode': 'cash', 'reason': 'Wrong size'}), 201)
+    assert r['credit_note']
+    vr = sql('SELECT used_value FROM msea_vouchers WHERE no=%s', v['no'])[0]
+    assert abs(float(vr['used_value']) - half / 2) < 0.02                   # half of the refund went back to the voucher
+    assert abs(float(sql('SELECT balance FROM invoices WHERE id=%s', inv['id'])[0]['balance']) - half / 2) < 0.02
+    assert all(dr == cr for dr, cr in books_balance().values())
 
 
 # ---------------------------------------------------------------- purchasing

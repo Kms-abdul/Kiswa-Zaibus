@@ -32,6 +32,10 @@ def voucher(no):
     if not v:
         raise not_found('Voucher not found.', 'unknown_voucher')
     out = v.as_dict()
+    from ..services.msea import describe
+    from ..services.common import money
+    out['terms'] = describe(v)
+    out['remaining'] = None if v.max_value is None else str(max(money(v.max_value) - money(v.used_value), 0))
     out['student'] = db.clean(db.one('SELECT * FROM students WHERE adm_no=:a', a=v.adm_no))
     out['issues'] = db.clean(db.q('SELECT id, no, inv_date, total, status FROM invoices WHERE msea_voucher_no=:v ORDER BY id', v=no))
     return jsonify(out)

@@ -120,6 +120,8 @@ def _open_shift(user_id, location):
 
 # ---------------------------------------------------------------- voucher checks (sponsored issue)
 def voucher_checks(v, company, lines, total):
+    """Problems that stop a bill against voucher v. MSEA's part is msea.share(); the amount limit only caps that part (the parent pays the
+    rest), and the categories listed on the voucher say what it may be used for (their quantities are a guide, not a limit)."""
     problems = []
     if v.company != company:
         problems.append('voucher is for the other company')
@@ -127,17 +129,14 @@ def voucher_checks(v, company, lines, total):
         problems.append(f'voucher status is {v.status}')
     if v.valid_to < today():
         problems.append(f'voucher expired on {v.valid_to}')
-    if money(v.used_value) + total > money(v.max_value):
-        problems.append(f'value Rs {total} is above the remaining Rs {money(v.max_value) - money(v.used_value)}')
-    used = dict(v.used_qty or {})
-    want = {}
-    for ln in lines:
-        cat = db.val('SELECT category FROM items WHERE id=:i', i=ln['item_id'])
-        want[cat] = want.get(cat, 0) + ln['qty']
-    for cat, q in want.items():
-        left = int((v.entitlement or {}).get(cat, 0)) - int(used.get(cat, 0))
-        if q > left:
-            problems.append(f'{cat}: {q} requested, entitlement left {max(0, left)}')
+    if v.max_value is not None and money(v.used_value) >= money(v.max_value):
+        problems.append('nothing is left on the voucher')
+    allowed = set(v.entitlement or {})
+    if allowed:
+        for ln in lines:
+            cat = db.val('SELECT category FROM items WHERE id=:i', i=ln['item_id'])
+            if cat not in allowed:
+                problems.append(f"{ln['description']} ({cat}) is not covered by the voucher (it is for {', '.join(sorted(allowed))})")
     return problems
 
 
@@ -192,31 +191,40 @@ def post_invoice(d, *, approved=None):
 
     # payments
     pays = []
+    msea_part = Decimal(0)
     if voucher:
+        from .msea import share
         problems = voucher_checks(voucher, co, lines, tot['total'])
         if problems:
             raise conflict('Voucher check failed: ' + '; '.join(problems), 'voucher_check_failed', problems=problems)
-        pays = [{'mode': 'credit', 'amount': tot['total'], 'ref': voucher.no}]
-    else:
-        for p in d.get('payments') or []:
-            mode = p.get('mode')
-            if mode not in PAY_ACCOUNT or mode == 'online':
-                raise bad(f'Unknown payment mode {mode}.', 'bad_payment_mode')
-            amt = money(p.get('amount'))
-            if amt <= 0:
-                continue
-            if mode in ('upi', 'card', 'bank') and not str(p.get('ref') or '').strip():
-                raise bad(f'Enter the {mode.upper()} reference number.', 'payment_ref_required')
-            ref = str(p.get('ref') or '').strip() or None
-            if ref and mode in ('upi', 'card', 'bank'):
-                used = db.one('''SELECT i.no FROM invoice_payments p JOIN invoices i ON i.id=p.invoice_id
-                                 WHERE p.mode=:m AND p.ref=:r AND i.company=:c AND i.status<>'Cancelled' LIMIT 1''', m=mode, r=ref, c=co)
-                if used or any(x['mode'] == mode and x['ref'] == ref for x in pays):
-                    raise conflict(f'{mode.upper()} reference {ref} is already used on bill {used["no"] if used else "this bill"}. '
-                                   'Check the payment; one payment cannot settle two bills.', 'duplicate_payment_ref')
-            pays.append({'mode': mode, 'amount': amt, 'ref': ref})
+        msea_part = share(voucher, tot['total'])
+        if msea_part > 0:
+            pays = [{'mode': 'credit', 'amount': msea_part, 'ref': voucher.no}]
+    # the parent's payments: all of a normal bill, the rest of a voucher bill
+    for p in d.get('payments') or []:
+        mode = p.get('mode')
+        if mode not in PAY_ACCOUNT or mode == 'online':
+            raise bad(f'Unknown payment mode {mode}.', 'bad_payment_mode')
+        if voucher and mode in ('credit', 'wallet'):
+            raise bad("The parent's part of a voucher bill is paid now: cash, UPI, card or bank.", 'bad_payment_mode')
+        amt = money(p.get('amount'))
+        if amt <= 0:
+            continue
+        if mode in ('upi', 'card', 'bank') and not str(p.get('ref') or '').strip():
+            raise bad(f'Enter the {mode.upper()} reference number.', 'payment_ref_required')
+        ref = str(p.get('ref') or '').strip() or None
+        if ref and mode in ('upi', 'card', 'bank'):
+            used = db.one('''SELECT i.no FROM invoice_payments p JOIN invoices i ON i.id=p.invoice_id
+                             WHERE p.mode=:m AND p.ref=:r AND i.company=:c AND i.status<>'Cancelled' LIMIT 1''', m=mode, r=ref, c=co)
+            if used or any(x['mode'] == mode and x['ref'] == ref for x in pays):
+                raise conflict(f'{mode.upper()} reference {ref} is already used on bill {used["no"] if used else "this bill"}. '
+                               'Check the payment; one payment cannot settle two bills.', 'duplicate_payment_ref')
+        pays.append({'mode': mode, 'amount': amt, 'ref': ref})
     paid = sum((p['amount'] for p in pays), Decimal(0))
     if paid != tot['total']:
+        if voucher:
+            raise bad(f'MSEA pays Rs {msea_part} of this Rs {tot["total"]} bill; the parent pays Rs {tot["total"] - msea_part} '
+                      f'(payments entered: Rs {paid - msea_part}).', 'payment_mismatch')
         raise bad(f'Payments (Rs {paid}) do not add up to the bill total (Rs {tot["total"]}).', 'payment_mismatch')
     cash_in = sum((p['amount'] for p in pays if p['mode'] == 'cash'), Decimal(0))
     cash_max = Decimal(str(controls.get('cashBillMax') or CASH_LIMIT_DEFAULT))
@@ -314,9 +322,9 @@ def post_invoice(d, *, approved=None):
             cat = db.val('SELECT category FROM items WHERE id=:i', i=ln['item_id'])
             used[cat] = int(used.get(cat, 0)) + ln['qty']
         voucher.used_qty = used
-        voucher.used_value = money(voucher.used_value) + tot['total']
-        full = all(int(used.get(k, 0)) >= int(q) for k, q in (voucher.entitlement or {}).items())
-        voucher.status = 'Fully used' if full else 'Partly used'
+        voucher.used_value = money(voucher.used_value) + msea_part
+        from .msea import close_if_used
+        close_if_used(voucher)
     audit.write('Invoice posted', inv.no, new=f"Rs {inv.total} · " + ' + '.join(f"{p['mode']} {p['amount']}" for p in pays),
                 reason=('Pending delivery: ' + inv.pending_reason) if inv.pending_reason else None, category='sales', company=co, branch=b['id'])
     if inv.override_reason:
@@ -437,9 +445,11 @@ def request_return(invoice_id, d):
         q = qty_by_line.get(ln.line_no, 0)
         if q < 0 or q > ln.qty - ln.returned_qty:
             raise bad(f'Return quantity for {ln.description} must be between 0 and {ln.qty - ln.returned_qty}.', 'bad_quantity')
-    mode = d.get('refund_mode') or ('credit' if inv.msea_voucher_no else 'cash')
-    if inv.msea_voucher_no and mode != 'credit':
-        raise bad('Sponsored issues can only be returned back to the MSEA voucher.', 'sponsored_return_mode')
+    mode = d.get('refund_mode') or ('credit' if inv.msea_voucher_no and not _parent_share(inv) else 'cash')
+    if inv.msea_voucher_no and not _parent_share(inv):
+        mode = 'credit'                                  # all of it was MSEA's: it goes back to the voucher
+    elif inv.msea_voucher_no and mode in ('credit', 'wallet'):
+        raise bad("MSEA's part goes back to the voucher; choose how the parent's part is paid back: cash, UPI, card or bank.", 'sponsored_return_mode')
     if mode not in PAY_ACCOUNT or mode == 'online' and not d.get('_online'):
         raise bad('Choose how the money goes back: cash, UPI, card, bank, wallet or against the account.', 'bad_payment_mode')
     taxable, tax, refund = return_value(inv, qty_by_line)
@@ -463,6 +473,12 @@ def _approve_return(p, apr):
     return f'Credit note {cn.no} issued'
 
 
+def _parent_share(inv):
+    """Part of a voucher bill the parent paid (the rest was MSEA's, against the voucher)."""
+    msea = db.val("SELECT COALESCE(SUM(amount), 0) FROM invoice_payments WHERE invoice_id=:i AND mode='credit'", i=inv.id) or 0
+    return max(Decimal(0), money(inv.total) - money(msea))
+
+
 def execute_return(inv, p, approval_no=None):
     co, br = inv.company, inv.branch_id
     check_lock(co, today())
@@ -471,7 +487,15 @@ def execute_return(inv, p, approval_no=None):
     damaged = p.get('condition') == 'Damaged'
     mode = p['refund_mode']
     cust = db.session().get(Customer, inv.customer_id)
-    if mode == 'cash' and not p.get('_online'):
+    # a voucher bill is refunded in the same proportion it was paid: MSEA's part back to the voucher, the parent's part in `mode`
+    msea_back = refund
+    if inv.msea_voucher_no:
+        parent = _parent_share(inv)
+        msea_back = money(refund * (money(inv.total) - parent) / money(inv.total)) if money(inv.total) else refund
+        if parent <= 0:
+            mode = 'credit'
+    parent_back = refund - msea_back if inv.msea_voucher_no else Decimal(0)
+    if (mode == 'cash' and not p.get('_online')) and (not inv.msea_voucher_no or parent_back > 0):
         shift = _open_shift(g.user['id'], db.val('SELECT location FROM branches WHERE id=:b', b=br))
     else:
         shift = None
@@ -504,7 +528,12 @@ def execute_return(inv, p, approval_no=None):
     else:
         cg = money(tax / 2)
         jl += [{'account': '2100', 'branch': br, 'debit': cg}, {'account': '2110', 'branch': br, 'debit': tax - cg}]
-    jl.append({'account': refund_acct, 'branch': br, 'credit': refund, 'party': party})
+    if inv.msea_voucher_no and parent_back > 0:
+        if msea_back:
+            jl.append({'account': cust.receivable_account if cust else '1210', 'branch': br, 'credit': msea_back, 'party': inv.customer_id})
+        jl.append({'account': PAY_ACCOUNT[mode], 'branch': br, 'credit': parent_back, 'party': None})
+    else:
+        jl.append({'account': refund_acct, 'branch': br, 'credit': refund, 'party': party})
     ro = refund - taxable - tax
     if ro:
         jl.append({'account': '5950', 'branch': br, 'debit': ro})
@@ -512,7 +541,9 @@ def execute_return(inv, p, approval_no=None):
         jl += [{'account': '5600' if damaged else '1300', 'branch': br, 'debit': cost}, {'account': '5000', 'branch': br, 'credit': cost}]
     j = ledger.post(co, today(), 'Credit note', cn.no, f"{cn.kind} of {inv.no}: {p['reason']}", jl, approval_no=approval_no)
     cn.journal_no = j.no
-    if mode == 'credit':
+    if inv.msea_voucher_no:
+        inv.balance = max(Decimal(0), money(inv.balance) - msea_back)
+    elif mode == 'credit':
         inv.balance = max(Decimal(0), money(inv.balance) - refund)
     if inv.msea_voucher_no:
         v = db.session().get(MseaVoucher, inv.msea_voucher_no, with_for_update=True)
@@ -524,8 +555,10 @@ def execute_return(inv, p, approval_no=None):
                     cat = db.val('SELECT category FROM items WHERE id=:i', i=ln.item_id)
                     used[cat] = max(0, int(used.get(cat, 0)) - q)
             v.used_qty = used
-            v.used_value = max(Decimal(0), money(v.used_value) - refund)
-            v.status = 'Partly used' if money(v.used_value) > 0 else 'Approved'
+            v.used_value = max(Decimal(0), money(v.used_value) - msea_back)
+            if v.status in ('Partly used', 'Fully used', 'Approved'):
+                from .msea import close_if_used
+                close_if_used(v)
     full = all(ln.returned_qty >= ln.qty for ln in inv.lines)
     inv.status = ('Cancelled' if cn.kind == 'Cancellation' else 'Returned') if full else 'Partly returned'
     audit.write('Invoice cancelled (credit note)' if cn.kind == 'Cancellation' else 'Sales return', cn.no, old=inv.no,
